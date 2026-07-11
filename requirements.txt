@@ -8,6 +8,7 @@ statsmodels>=0.14
 markdown>=3.5
 pymupdf>=1.24
 matplotlib>=3.7
+pillow>=10.0
 
 # === Standalone board: CLI orchestrator + web UI (needs an API key) ===
 # Not required to use the engine, the desktop GUI, or the Claude Code skills.

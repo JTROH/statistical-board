@@ -7,12 +7,14 @@ Each function saves a PNG into ``assets_dir`` and the module returns a list of
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")  # no display needed
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+from PIL import Image  # noqa: E402
 from scipy import stats  # noqa: E402
 
 TEAL_DARK = "#0f5e6e"
@@ -20,6 +22,26 @@ TEAL = "#157d90"
 TEAL_LIGHT = "#cbeef0"
 ACCENT = "#b45309"
 _DPI = 96  # keeps the report light; still crisp at the 460px display width
+
+
+def _save(fig, path: Path) -> None:
+    """Write the figure as a flat, opaque DeviceRGB PNG — no alpha/SMask and no
+    ICC profile — so it renders in every PDF viewer (Preview, Chrome, PDF.js),
+    not only MuPDF. matplotlib's default RGBA + sRGB-ICC PNGs get embedded as
+    ICCBased images with a soft mask, which several common viewers draw blank."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=_DPI)
+    plt.close(fig)
+    buf.seek(0)
+    im = Image.open(buf)
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        bg = Image.new("RGB", im.size, (255, 255, 255))
+        bg.paste(im, mask=im.split()[-1])
+        im = bg
+    else:
+        im = im.convert("RGB")
+    im.save(path, format="PNG")  # a fresh RGB image carries no ICC profile
 
 
 def _arrays(groups: dict[str, list[float]]) -> tuple[list[str], list[np.ndarray]]:
@@ -59,7 +81,7 @@ def boxplot(groups, assets_dir: Path) -> dict[str, str]:
                    s=14, color=TEAL, alpha=0.5, edgecolors="none", zorder=3)
     ax.set_ylabel("Value"); ax.set_title("Distribution by group (box + observations)")
     _style(ax); fig.tight_layout()
-    path = assets_dir / "fig_box.png"; fig.savefig(path, dpi=_DPI); plt.close(fig)
+    path = assets_dir / "fig_box.png"; _save(fig, path)
     return {"file": path.name, "caption": "Figure 1. Box plot of each group with individual observations overlaid."}
 
 
@@ -78,7 +100,7 @@ def means_ci(groups, assets_dir: Path, alpha: float = 0.05) -> dict[str, str]:
     ax.set_xticks(x); ax.set_xticklabels(names)
     ax.set_ylabel("Mean"); ax.set_title(f"Group means with {int((1-alpha)*100)}% confidence intervals")
     _style(ax); fig.tight_layout()
-    path = assets_dir / "fig_means.png"; fig.savefig(path, dpi=_DPI); plt.close(fig)
+    path = assets_dir / "fig_means.png"; _save(fig, path)
     return {"file": path.name, "caption": f"Figure 2. Group means with {int((1-alpha)*100)}% CIs; non-overlapping bars suggest a difference."}
 
 
@@ -92,7 +114,7 @@ def residual_qq(groups, assets_dir: Path) -> dict[str, str]:
     ax.set_xlabel("Theoretical quantiles"); ax.set_ylabel("Ordered residuals")
     ax.set_title("Normal Q-Q plot of residuals")
     _style(ax); fig.tight_layout()
-    path = assets_dir / "fig_qq.png"; fig.savefig(path, dpi=_DPI); plt.close(fig)
+    path = assets_dir / "fig_qq.png"; _save(fig, path)
     return {"file": path.name, "caption": "Figure 3. Normal Q-Q plot of model residuals; points on the line support the normality assumption."}
 
 
@@ -105,7 +127,7 @@ def residuals_vs_fitted(groups, assets_dir: Path) -> dict[str, str]:
     ax.set_xlabel("Fitted value (group mean)"); ax.set_ylabel("Residual")
     ax.set_title("Residuals vs. fitted")
     _style(ax); fig.tight_layout()
-    path = assets_dir / "fig_resid.png"; fig.savefig(path, dpi=_DPI); plt.close(fig)
+    path = assets_dir / "fig_resid.png"; _save(fig, path)
     return {"file": path.name, "caption": "Figure 4. Residuals vs. fitted values; even vertical spread across groups supports equal variance."}
 
 
