@@ -49,13 +49,17 @@ python3 -m stat_board.engine <command> --data <file> [--alpha 0.05] [options]
 `describe` · `assumptions` · `ttest [--paired] [--equal-var]` · `mannwhitney` ·
 `anova` · `welch-anova` · `kruskal` · `tukey` ·
 `tost (--margin-pct P | --low L --high H)` · `bayes-ttest [--paired] [--r 0.707]` ·
-`correlation --method pearson|spearman|kendall` ·
-`regression --formula "y ~ x1 + x2"` · `chisquare --table "[[..],[..]]"` ·
+`correlation --method pearson|spearman|kendall` · `chisquare --table "[[..],[..]]"` ·
 `power --test ttest|anova --effect-size D (--n N | --power P)` ·
 `correct --pvalues "[..]" --method fdr_bh|bonferroni|holm`
 
-Data shapes: wide CSV (one column per group), long CSV (add
-`--group-col`/`--value-col`), or JSON `{"A":[...],"B":[...]}`.
+Multi-factor (whole table, by column name):
+`two-way-anova --value COL --factor F1 --factor F2` · `ancova --value COL --factor F --covariate C` ·
+`regression --formula "y ~ x1 + x2 + C(g)"`
+
+Data shapes: for one-factor group comparisons — wide CSV (one column per group),
+long CSV (add `--group-col`/`--value-col`), or JSON `{"A":[...],"B":[...]}`. For
+multi-factor, a tidy CSV with one column per variable (outcome, factors, covariates).
 
 ## Rules
 

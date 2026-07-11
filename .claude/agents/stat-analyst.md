@@ -34,7 +34,15 @@ Commands (all take `--alpha`, default 0.05):
 - `tost --margin-pct P` or `tost --low L --high H` — equivalence testing.
 - `bayes-ttest` [`--paired`] [`--r 0.707`] — JZS Bayes factor (BF10).
 - `correlation --method pearson|spearman|kendall` — first two columns as paired x,y.
-- `regression --data FILE --formula "y ~ x1 + x2"` — OLS.
+
+Multi-factor commands (operate on the whole table by column name — use these when
+the design has 2+ factors, or a factor plus a covariate; the one-factor group
+commands above do NOT apply then):
+- `two-way-anova --value COL --factor F1 --factor F2 [--type 2]` — factorial ANOVA
+  (main effects + interactions), per-term F/p and partial eta².
+- `ancova --value COL --factor F --covariate C` — factor(s) adjusted for covariate(s).
+- `regression --data FILE --formula "y ~ x1 + x2 + C(g)"` — OLS with an ANOVA
+  term table + residual diagnostics.
 - `chisquare --table "[[..],[..]]"` — independence.
 - `power --test ttest|anova --effect-size D (--n N | --power P)` — solve for the omitted one.
 - `correct --pvalues "[..]" --method fdr_bh|bonferroni|holm` — multiple-comparison correction.
@@ -48,7 +56,10 @@ Commands (all take `--alpha`, default 0.05):
    non-normal data, ALSO run the robust/non-parametric counterpart so the board
    can compare (e.g. run both `anova` and `welch-anova`; both `ttest` and
    `mannwhitney`). For any two-group difference, also run `bayes-ttest` so the
-   Bayesian critic has a Bayes factor to reason about.
+   Bayesian critic has a Bayes factor to reason about. If the design is
+   MULTI-FACTOR (two+ factors, or a factor plus a covariate), use
+   `two-way-anova` / `ancova` / `regression` instead of the one-factor group
+   commands, and report every term's F, p, and partial eta².
 4. Paste the exact JSON blocks you got, each under a heading naming the command
    you ran (including the flags). Do not round, reword, or "clean up" numbers.
 

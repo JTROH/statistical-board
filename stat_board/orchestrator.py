@@ -60,12 +60,35 @@ def _describe_data(data_path: str, group_col: str | None, value_col: str | None)
     return f"{len(groups)} group(s):\n" + "\n".join(lines)
 
 
+def _describe_table(data_path: str, value: str, factors: list[str],
+                    covariates: list[str] | None) -> str:
+    """Column-by-column description for a multi-factor design."""
+    import pandas as pd
+
+    from .engine.data import load_dataframe
+    try:
+        df = load_dataframe(data_path)
+    except Exception as exc:  # noqa: BLE001
+        return f"(could not load table: {exc})"
+    lines = [f"Design — outcome: {value!r}; factors: {factors}; "
+             f"covariates: {covariates or 'none'}.", f"{len(df)} rows, columns:"]
+    for c in df.columns:
+        if pd.api.types.is_numeric_dtype(df[c]):
+            lines.append(f"- {c}: numeric (mean={df[c].mean():.4g}, sd={df[c].std():.4g})")
+        else:
+            levels = list(map(str, df[c].dropna().unique()))[:8]
+            lines.append(f"- {c}: categorical, {df[c].nunique()} level(s) {levels}")
+    return "\n".join(lines)
+
+
 async def run(
     question: str,
     data_path: str,
     *,
     group_col: str | None = None,
     value_col: str | None = None,
+    factors: list[str] | None = None,
+    covariates: list[str] | None = None,
     paired: bool = False,
     alpha: float = 0.05,
     max_rounds: int | None = None,
@@ -87,11 +110,27 @@ async def run(
     local_tools = {engine_tool.TOOL_NAME: executor}
     tool_specs = [engine_tool.build_tool()]
 
-    load_hint = (f"Load with group column {group_col!r}, value column {value_col!r}."
-                 if group_col else "Loaded automatically (wide CSV or JSON groups).")
-    design = "PAIRED/repeated-measures design." if paired else "Independent-samples design (assumed)."
-    data_desc = _describe_data(data_path, group_col, value_col)
-    context = (f"QUESTION:\n{question}\n\nDATA: `{data_path}` — {load_hint}\n{design}\n"
+    multifactor = bool(factors) or bool(covariates)
+    if multifactor:
+        data_desc = _describe_table(data_path, value_col or "?", factors or [], covariates)
+        design_note = (
+            "MULTI-FACTOR design. Analyze the whole table by column name with the "
+            "run_stat multi-factor commands: `two-way-anova` (main effects + "
+            "interactions of the factors), `ancova` (factors adjusted for the "
+            "covariates), and/or `regression` (a patsy formula). The one-factor "
+            "group commands (anova/ttest/tukey) do NOT apply to this design.")
+        instructions = ("First round: run two-way-anova over the factors (and ancova "
+                        "if covariates are given), report every term's F, p and "
+                        "partial eta^2, and check the residual diagnostics.")
+    else:
+        load_hint = (f"Load with group column {group_col!r}, value column {value_col!r}."
+                     if group_col else "Loaded automatically (wide CSV or JSON groups).")
+        design_note = ("PAIRED/repeated-measures design." if paired
+                       else "Independent-samples, single-factor design (assumed).")
+        design_note += " " + load_hint
+        data_desc = _describe_data(data_path, group_col, value_col)
+        instructions = "First round: run describe + assumptions, then the tests the plan calls for."
+    context = (f"QUESTION:\n{question}\n\nDATA: `{data_path}`\n{design_note}\n"
                f"alpha = {alpha}\n\nDATA SUMMARY:\n{data_desc}")
 
     if dry_run:
@@ -109,7 +148,7 @@ async def run(
     transcript.key_questions = plan.get("key_questions", [])
     plan_text = plan["plan"]
     open_qs = "\n".join(f"- {q}" for q in transcript.key_questions)
-    instructions = "First round: run describe + assumptions, then the tests the plan calls for."
+    # `instructions` for round 1 was set with the design context above.
     _log(f"Plan set. Hypothesis: {transcript.hypothesis[:80]}...")
     emit("plan", hypothesis=transcript.hypothesis, plan=plan_text,
          key_questions=transcript.key_questions)

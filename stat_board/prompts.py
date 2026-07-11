@@ -20,6 +20,9 @@ Given the question and a description of the data, produce:
    and the alpha.
 2. The candidate analysis path: which test(s) fit the design, and which
    assumptions decide between the parametric and the robust/non-parametric branch.
+   If the design has two or more factors, or a factor plus a numeric covariate,
+   plan a MULTI-FACTOR analysis — two-way/factorial ANOVA (with the interaction),
+   ANCOVA, or multiple regression — not a one-factor group comparison.
 3. The key open questions that drive round 1 — usually whether assumptions hold
    and whether n is adequate.
 
@@ -40,7 +43,13 @@ Work the plan the judge gave you:
    and `welch-anova`; both `ttest` and `mannwhitney`) so the board can compare.
    For any two-group difference, also run `bayes-ttest` so the Bayesian critic
    has a Bayes factor. For "no difference" questions, run `tost`.
-3. Report the exact numbers the tool returned — do not round or reword them.
+3. If the design is MULTI-FACTOR (two or more factors, or a factor plus a
+   covariate — the design note will say so), do NOT use the one-factor group
+   commands. Use `two-way-anova` (factors + their interactions), `ancova`
+   (factor(s) adjusted for covariate(s)), and/or `regression` (a patsy formula).
+   Report every model term's F, p, and partial eta^2, plus the residual
+   diagnostics (normality of residuals, Durbin–Watson).
+4. Report the exact numbers the tool returned — do not round or reword them.
    Organize by test, and state which command (with parameters) produced each.
 
 Do NOT interpret beyond the engine's own `conclusion` fields, and do NOT decide

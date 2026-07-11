@@ -18,8 +18,8 @@ _GROUP_COMMANDS = {
     "describe", "assumptions", "ttest", "mannwhitney", "anova", "welch-anova",
     "kruskal", "tukey", "tost", "bayes-ttest", "correlation",
 }
-# Commands that stand alone (arguments carry all the data they need).
-_STANDALONE = {"regression", "chisquare", "power", "correct"}
+# Commands that run on the whole table by column name (multi-factor / standalone).
+_STANDALONE = {"regression", "two-way-anova", "ancova", "chisquare", "power", "correct"}
 
 TOOL_NAME = "run_stat"
 
@@ -33,9 +33,11 @@ def build_tool() -> dict[str, Any]:
             "exact JSON result. This is the ONLY way to obtain real numbers — never "
             "estimate a statistic yourself. Group-based commands (describe, "
             "assumptions, ttest, mannwhitney, anova, welch-anova, kruskal, tukey, "
-            "tost, bayes-ttest, correlation) run on the bound dataset automatically. "
-            "Standalone commands (regression, chisquare, power, correct) take their "
-            "data in the parameters."
+            "tost, bayes-ttest, correlation) compare one numeric outcome across one "
+            "grouping factor. MULTI-FACTOR commands work by column name on the whole "
+            "table: two-way-anova (2+ categorical factors + interactions), ancova "
+            "(factor(s) + numeric covariate(s)), and regression (a patsy formula). "
+            "chisquare/power/correct carry their data in the parameters."
         ),
         "input_schema": {
             "type": "object",
@@ -53,7 +55,13 @@ def build_tool() -> dict[str, Any]:
                 "high": {"type": "number", "description": "tost: absolute upper equivalence bound."},
                 "method": {"type": "string", "description": "correlation: pearson|spearman|kendall. correct: fdr_bh|bonferroni|holm."},
                 "r": {"type": "number", "description": "bayes-ttest: Cauchy prior scale (default 0.707)."},
-                "formula": {"type": "string", "description": "regression: patsy formula, e.g. 'y ~ x1 + x2'."},
+                "formula": {"type": "string", "description": "regression: patsy formula, e.g. 'y ~ x1 + x2 + C(g)'."},
+                "value": {"type": "string", "description": "two-way-anova/ancova: numeric outcome column."},
+                "factors": {"type": "array", "items": {"type": "string"},
+                            "description": "two-way-anova/ancova: categorical factor columns."},
+                "covariates": {"type": "array", "items": {"type": "string"},
+                               "description": "ancova: numeric covariate columns."},
+                "typ": {"type": "integer", "description": "regression/two-way-anova/ancova: ANOVA SS type 1|2|3 (default 2)."},
                 "table": {"type": "array", "items": {"type": "array", "items": {"type": "number"}},
                           "description": "chisquare: 2D contingency table."},
                 "pvalues": {"type": "array", "items": {"type": "number"}, "description": "correct: raw p-values."},
@@ -113,7 +121,13 @@ def make_executor(
                 elif cmd == "correlation":
                     res = analyses.correlation(g, method=inp.get("method", "pearson"), alpha=a)
             elif cmd == "regression":
-                res = analyses.regression(data_path, inp["formula"], alpha=a)
+                res = analyses.regression(data_path, inp["formula"], typ=inp.get("typ", 2), alpha=a)
+            elif cmd == "two-way-anova":
+                res = analyses.two_way_anova(data_path, value=inp["value"], factors=inp["factors"],
+                                             typ=inp.get("typ", 2), alpha=a)
+            elif cmd == "ancova":
+                res = analyses.ancova(data_path, value=inp["value"], factors=inp["factors"],
+                                      covariates=inp["covariates"], typ=inp.get("typ", 2), alpha=a)
             elif cmd == "chisquare":
                 res = analyses.chi_square(inp["table"], alpha=a)
             elif cmd == "power":

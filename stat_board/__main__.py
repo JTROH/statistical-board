@@ -22,8 +22,12 @@ def main() -> int:
     )
     parser.add_argument("question", help="The statistical question, e.g. 'Do the groups differ?'")
     parser.add_argument("--data", required=True, help="Dataset (CSV or JSON).")
-    parser.add_argument("--group-col", help="Long-format: column of group labels.")
-    parser.add_argument("--value-col", help="Long-format: column of values.")
+    parser.add_argument("--group-col", help="One-factor long-format: column of group labels.")
+    parser.add_argument("--value-col", help="Outcome column (long-format group value, or the multi-factor outcome).")
+    parser.add_argument("--factor", action="append", dest="factors",
+                        help="Multi-factor: a categorical factor column (repeat for each).")
+    parser.add_argument("--covariate", action="append", dest="covariates",
+                        help="Multi-factor: a numeric covariate column (repeat for each).")
     parser.add_argument("--paired", action="store_true", help="Paired / repeated-measures design.")
     parser.add_argument("--alpha", type=float, default=0.05, help="Significance level (default 0.05).")
     parser.add_argument("--rounds", type=int, default=config.MAX_ROUNDS,
@@ -41,6 +45,7 @@ def main() -> int:
     try:
         result = asyncio.run(orchestrator.run(
             args.question, args.data, group_col=args.group_col, value_col=args.value_col,
+            factors=args.factors, covariates=args.covariates,
             paired=args.paired, alpha=args.alpha, max_rounds=args.rounds, dry_run=args.dry_run))
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)

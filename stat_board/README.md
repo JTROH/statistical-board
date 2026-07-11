@@ -48,13 +48,17 @@ python3 -m stat_board.engine <command> --data <file.csv|.json> [options]
 | `tost` `(--margin-pct P \| --low L --high H)` | Equivalence testing (TOST) |
 | `bayes-ttest` `[--paired] [--r 0.707]` | JZS Bayes factor (BF10) |
 | `correlation --method pearson\|spearman\|kendall` | Correlation of two columns |
-| `regression --formula "y ~ x1 + x2"` | OLS |
 | `chisquare --table "[[..],[..]]"` | Independence + Cramér's V |
 | `power --test ttest\|anova --effect-size D (--n N \| --power P)` | Solve for n or power |
 | `correct --pvalues "[..]" --method fdr_bh\|bonferroni\|holm` | Multiple-comparison correction |
+| **`two-way-anova --value V --factor F1 --factor F2`** | Factorial ANOVA (main effects + interactions), partial η² |
+| **`ancova --value V --factor F --covariate C`** | Factor(s) adjusted for numeric covariate(s) |
+| **`regression --formula "y ~ x1 + x2 + C(g)"`** | OLS + ANOVA term table + residual diagnostics |
 
-Data shapes: **wide** CSV (one column per group), **long** CSV
-(`--group-col`/`--value-col`), or **JSON** `{"A": [...], "B": [...]}`.
+Data shapes: for one-factor comparisons — **wide** CSV (one column per group),
+**long** CSV (`--group-col`/`--value-col`), or **JSON** `{"A": [...], "B": [...]}`.
+For **multi-factor**, a tidy CSV with one column per variable (outcome, factors,
+covariates) analyzed by column name.
 
 ## Usage (Claude Code)
 

@@ -52,9 +52,17 @@ python3 -m stat_board.engine describe    --data sample_data/long.csv --group-col
 python3 -m stat_board.engine assumptions --data sample_data/long.csv --group-col group --value-col value
 python3 -m stat_board.engine welch-anova --data sample_data/wide.csv
 ```
-Commands: `describe`, `assumptions`, `ttest`, `mannwhitney`, `anova`,
+One-factor commands: `describe`, `assumptions`, `ttest`, `mannwhitney`, `anova`,
 `welch-anova`, `kruskal`, `tukey`, `tost`, `bayes-ttest`, `correlation`,
-`regression`, `chisquare`, `power`, `correct`. JSON in, JSON out.
+`chisquare`, `power`, `correct`. **Multi-factor** (whole table, by column name):
+`two-way-anova`, `ancova`, `regression`. JSON in, JSON out.
+
+```bash
+# multi-factor examples
+python3 -m stat_board.engine two-way-anova --data data.csv --value score --factor treatment --factor sex
+python3 -m stat_board.engine ancova       --data data.csv --value score --factor treatment --covariate age
+python3 -m stat_board.engine regression   --data data.csv --formula "score ~ treatment * sex + age"
+```
 
 ### 2. Desktop GUI (no key)
 ```bash
@@ -69,7 +77,11 @@ export ANTHROPIC_API_KEY=sk-ant-...        # or copy .env.example -> .env
 python3 -m stat_board "Do the groups differ?" \
     --data sample_data/long.csv --group-col group --value-col value
 
-python3 -m stat_board.webapp               # → http://127.0.0.1:8643 (upload data, watch live)
+# multi-factor: name the outcome, factor(s) and covariate(s)
+python3 -m stat_board "Does treatment affect score, adjusting for age?" \
+    --data data.csv --value-col score --factor treatment --factor sex --covariate age
+
+python3 -m stat_board.webapp               # → http://127.0.0.1:8643 (upload data, pick columns, watch live)
 ```
 Try it with **no key** using `--dry-run` (stubbed agents, real report structure):
 ```bash

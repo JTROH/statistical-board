@@ -92,8 +92,22 @@ def load_groups(
         }
         return _validate(groups)
 
-    # Wide: each numeric column is a group.
     numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+
+    # A tidy table that mixes categorical and numeric columns is ambiguous for
+    # one-factor loading — we can't guess which column is the factor and which is
+    # the outcome. Fail loudly with guidance instead of silently treating every
+    # numeric column (IDs, covariates, ...) as a comparison group.
+    if non_numeric:
+        raise DataError(
+            f"ambiguous multi-column table (categorical columns {non_numeric}, "
+            f"numeric columns {numeric}). For a ONE-factor comparison, pass "
+            f"--group-col <factor> --value-col <outcome>. For a MULTI-factor design, "
+            f"use the two-way-anova / ancova / regression commands (they take "
+            f"--value / --factor / --covariate)."
+        )
+
+    # Wide: every column is numeric → each is a group.
     if not numeric:
         raise DataError("no numeric columns found; is this a long table? pass --group-col/--value-col")
     groups = {str(c): _clean(df[c]) for c in numeric}

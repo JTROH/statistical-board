@@ -23,10 +23,16 @@ Parse from the skill argument:
 - `rounds=N` — cap on rounds (default 2, max 4).
 - Optional hints you should pass through: `alpha=`, whether the design is
   `paired`, group/value column names for long CSVs, equivalence margin.
+- **Multi-factor designs:** if the data has two or more factors, or a factor plus
+  a numeric covariate (e.g. `factors=treatment,sex covariate=age value=score`),
+  this is a multi-factor analysis. Tell the analyst to use `two-way-anova`,
+  `ancova`, and/or `regression` (which work on the whole table by column name)
+  rather than the one-factor group commands.
 
 Before Round 1, look at the data yourself (Read the file head, or run
-`python3 -m stat_board.engine describe --data <path>`) so your plan reflects the
-actual shape, group count, and sample sizes.
+`python3 -m stat_board.engine describe --data <path>` for one factor, or check the
+column names/types for a multi-factor table) so your plan reflects the actual
+shape, factors, and sample sizes.
 
 ## Phase 1 — Plan
 

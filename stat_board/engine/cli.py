@@ -51,8 +51,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser("regression")
     r.add_argument("--data", required=True)
-    r.add_argument("--formula", required=True, help="patsy formula, e.g. 'y ~ x1 + x2'")
+    r.add_argument("--formula", required=True, help="patsy formula, e.g. 'y ~ x1 + x2 + C(g)'")
+    r.add_argument("--type", type=int, choices=[1, 2, 3], default=2, dest="typ",
+                   help="ANOVA sum-of-squares type (default 2)")
     r.add_argument("--alpha", type=float, default=0.05)
+
+    tw = sub.add_parser("two-way-anova", help="factorial ANOVA (2+ categorical factors + interactions)")
+    tw.add_argument("--data", required=True)
+    tw.add_argument("--value", required=True, help="numeric outcome column")
+    tw.add_argument("--factor", action="append", required=True, dest="factors",
+                    help="categorical factor column (repeat --factor for each)")
+    tw.add_argument("--type", type=int, choices=[1, 2, 3], default=2, dest="typ")
+    tw.add_argument("--alpha", type=float, default=0.05)
+
+    an = sub.add_parser("ancova", help="factor(s) adjusted for numeric covariate(s)")
+    an.add_argument("--data", required=True)
+    an.add_argument("--value", required=True, help="numeric outcome column")
+    an.add_argument("--factor", action="append", required=True, dest="factors")
+    an.add_argument("--covariate", action="append", required=True, dest="covariates")
+    an.add_argument("--type", type=int, choices=[1, 2, 3], default=2, dest="typ")
+    an.add_argument("--alpha", type=float, default=0.05)
 
     ch = sub.add_parser("chisquare")
     ch.add_argument("--table", required=True, help="JSON 2D array, e.g. '[[10,20],[30,40]]'")
@@ -111,7 +129,13 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if cmd == "correlation":
         return analyses.correlation(groups, method=args.method, alpha=args.alpha)
     if cmd == "regression":
-        return analyses.regression(args.data, args.formula, alpha=args.alpha)
+        return analyses.regression(args.data, args.formula, typ=args.typ, alpha=args.alpha)
+    if cmd == "two-way-anova":
+        return analyses.two_way_anova(args.data, value=args.value, factors=args.factors,
+                                      typ=args.typ, alpha=args.alpha)
+    if cmd == "ancova":
+        return analyses.ancova(args.data, value=args.value, factors=args.factors,
+                               covariates=args.covariates, typ=args.typ, alpha=args.alpha)
     if cmd == "chisquare":
         return analyses.chi_square(json.loads(args.table), alpha=args.alpha)
     if cmd == "power":

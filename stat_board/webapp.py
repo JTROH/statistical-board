@@ -47,6 +47,8 @@ class Run:
     alpha: float
     rounds: int
     dry_run: bool
+    factors: list[str] | None = None
+    covariates: list[str] | None = None
     status: str = "running"  # running | done | error
     events: list[dict[str, Any]] = field(default_factory=list)
     changed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -66,6 +68,8 @@ class RunRequest(BaseModel):
     alpha: float = 0.05
     rounds: int | None = None
     dry_run: bool = False
+    factors: list[str] | None = None
+    covariates: list[str] | None = None
 
 
 class UploadRequest(BaseModel):
@@ -82,6 +86,7 @@ async def _execute(run: Run) -> None:
     try:
         result = await orchestrator.run(
             run.question, run.data, group_col=run.group_col, value_col=run.value_col,
+            factors=run.factors, covariates=run.covariates,
             paired=run.paired, alpha=run.alpha, max_rounds=run.rounds,
             dry_run=run.dry_run, on_event=lambda e: _push(run, e),
         )
@@ -129,6 +134,25 @@ async def datasets() -> list[str]:
     return [x for x in out if not (x in seen or seen.add(x))]
 
 
+@app.get("/api/columns")
+async def columns(data: str) -> dict[str, Any]:
+    """Column names + types for a dataset, so the UI can offer outcome/factor/
+    covariate pickers for multi-factor designs."""
+    import pandas as pd
+    p = Path(data)
+    if not p.is_file():
+        raise HTTPException(400, f"data file not found: {data}")
+    try:
+        df = pd.read_json(p) if p.suffix.lower() == ".json" else pd.read_csv(p, nrows=2000)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"could not read table: {exc}")
+    numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    categorical = [c for c in df.columns if c not in numeric]
+    return {"columns": list(map(str, df.columns)),
+            "numeric": list(map(str, numeric)),
+            "categorical": list(map(str, categorical))}
+
+
 @app.post("/api/upload")
 async def upload(req: UploadRequest) -> dict[str, str]:
     """Accept a small CSV/JSON as text (no multipart dependency) and save it
@@ -158,7 +182,7 @@ async def start_run(req: RunRequest) -> dict[str, str]:
         id=uuid.uuid4().hex[:12], question=question, data=data,
         group_col=req.group_col or None, value_col=req.value_col or None,
         paired=req.paired, alpha=req.alpha, rounds=req.rounds or config.MAX_ROUNDS,
-        dry_run=req.dry_run,
+        dry_run=req.dry_run, factors=req.factors or None, covariates=req.covariates or None,
     )
     RUNS[run.id] = run
     asyncio.create_task(_execute(run))

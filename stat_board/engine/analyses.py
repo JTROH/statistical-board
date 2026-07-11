@@ -383,34 +383,101 @@ def correlation(groups: Groups, *, method: str = "pearson", alpha: float = 0.05)
     }
 
 
-def regression(path: str, formula: str, *, alpha: float = 0.05) -> dict[str, Any]:
-    """OLS regression via a patsy formula (e.g. 'y ~ x1 + x2') over a table."""
+def _safe(name: str) -> str:
+    """Wrap a column name for patsy: bare if it's a valid identifier, else Q('..')."""
+    import re
+    return name if re.match(r"^[A-Za-z_]\w*$", name) else f"Q('{name}')"
+
+
+def _fit_and_anova(path: str, formula: str, *, typ: int = 2, alpha: float = 0.05) -> dict[str, Any]:
+    """Fit an OLS model from a patsy formula and return its coefficient table, the
+    ANOVA table (Type II/III SS, with partial eta^2 per term), overall fit, and
+    residual diagnostics. Shared core for regression / two-way ANOVA / ANCOVA."""
     import statsmodels.formula.api as smf
+    from statsmodels.stats.anova import anova_lm
+    from statsmodels.stats.stattools import durbin_watson
 
     from .data import load_dataframe
 
     df = load_dataframe(path)
     model = smf.ols(formula, data=df).fit()
+    ci = model.conf_int(alpha)
     coefs = {
         name: {
-            "coef": float(model.params[name]),
-            "std_err": float(model.bse[name]),
-            "t": float(model.tvalues[name]),
-            "p": float(model.pvalues[name]),
-            "ci95": [float(model.conf_int(alpha).loc[name][0]),
-                     float(model.conf_int(alpha).loc[name][1])],
+            "coef": float(model.params[name]), "std_err": float(model.bse[name]),
+            "t": float(model.tvalues[name]), "p": float(model.pvalues[name]),
+            "ci": [float(ci.loc[name][0]), float(ci.loc[name][1])],
         }
         for name in model.params.index
     }
+    aov = anova_lm(model, typ=typ)
+    ss_resid = float(aov["sum_sq"].get("Residual", float("nan")))
+    terms = []
+    for name, row in aov.iterrows():
+        if name == "Residual":
+            continue
+        ss = float(row["sum_sq"])
+        peta = ss / (ss + ss_resid) if (ss + ss_resid) else float("nan")
+        terms.append({
+            "term": name, "sum_sq": ss, "df": float(row["df"]), "F": float(row["F"]),
+            "p": float(row["PR(>F)"]), "partial_eta_sq": peta,
+            "magnitude": effects.interpret_eta(peta),
+            "significant": bool(row["PR(>F)"] < alpha),
+        })
+    resid = np.asarray(model.resid, float)
+    diagnostics: dict[str, Any] = {"durbin_watson": float(durbin_watson(resid))}
+    if len(resid) >= 3:
+        w, p = stats.shapiro(resid)
+        diagnostics.update(resid_shapiro_W=float(w), resid_shapiro_p=float(p),
+                           resid_normal_at_alpha=bool(p > alpha))
     return {
-        "analysis": "regression",
-        "formula": formula,
-        "n": int(model.nobs),
-        "r_squared": float(model.rsquared),
-        "adj_r_squared": float(model.rsquared_adj),
-        "f_pvalue": float(model.f_pvalue),
-        "coefficients": coefs,
+        "formula": formula, "typ": typ, "n": int(model.nobs),
+        "r_squared": float(model.rsquared), "adj_r_squared": float(model.rsquared_adj),
+        "f_pvalue": float(model.f_pvalue), "aic": float(model.aic), "bic": float(model.bic),
+        "anova": terms, "coefficients": coefs, "residual_diagnostics": diagnostics,
     }
+
+
+def regression(path: str, formula: str, *, typ: int = 2, alpha: float = 0.05) -> dict[str, Any]:
+    """Multiple/linear regression from a patsy formula (e.g. 'y ~ x1 + x2 + C(g)').
+    Returns coefficients, an ANOVA term table, overall fit (R²/AIC/BIC), and
+    residual diagnostics."""
+    out = _fit_and_anova(path, formula, typ=typ, alpha=alpha)
+    out["analysis"] = "regression"
+    return out
+
+
+def two_way_anova(path: str, *, value: str, factors: list[str], typ: int = 2,
+                  alpha: float = 0.05) -> dict[str, Any]:
+    """Factorial ANOVA: main effects + all interactions of 2+ categorical factors
+    (e.g. score ~ treatment * sex). Reports per-term F, p, and partial eta²."""
+    if len(factors) < 2:
+        raise ValueError("two-way/factorial ANOVA needs at least 2 factors")
+    formula = f"{_safe(value)} ~ " + " * ".join(f"C({_safe(f)})" for f in factors)
+    out = _fit_and_anova(path, formula, typ=typ, alpha=alpha)
+    out["analysis"] = "two_way_anova"
+    out["value"], out["factors"] = value, factors
+    sig = [t["term"] for t in out["anova"] if t["significant"]]
+    out["conclusion"] = (f"Significant effects (Type {typ} SS, alpha={alpha:g}): "
+                         f"{', '.join(sig) if sig else 'none'}.")
+    return out
+
+
+def ancova(path: str, *, value: str, factors: list[str], covariates: list[str],
+           typ: int = 2, alpha: float = 0.05) -> dict[str, Any]:
+    """ANCOVA: categorical factor(s) adjusted for numeric covariate(s)
+    (e.g. score ~ C(treatment) + age)."""
+    if not factors or not covariates:
+        raise ValueError("ANCOVA needs at least one factor and one covariate")
+    rhs = [f"C({_safe(f)})" for f in factors] + [_safe(c) for c in covariates]
+    formula = f"{_safe(value)} ~ " + " + ".join(rhs)
+    out = _fit_and_anova(path, formula, typ=typ, alpha=alpha)
+    out["analysis"] = "ancova"
+    out["value"], out["factors"], out["covariates"] = value, factors, covariates
+    sig = [t["term"] for t in out["anova"] if t["significant"]]
+    out["conclusion"] = (f"Adjusting for {', '.join(covariates)} (alpha={alpha:g}), "
+                         f"significant effects: {', '.join(sig) if sig else 'none'}.")
+    return out
 
 
 def chi_square(table: list[list[float]], *, alpha: float = 0.05) -> dict[str, Any]:

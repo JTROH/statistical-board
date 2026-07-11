@@ -18,6 +18,7 @@ from .analyses import (
     correct_pvalues,
     correlation,
     describe,
+    ancova,
     kruskal,
     mann_whitney,
     pairwise_effects,
@@ -27,6 +28,7 @@ from .analyses import (
     tost,
     ttest,
     tukey_posthoc,
+    two_way_anova,
     welch_anova,
 )
 
@@ -36,4 +38,5 @@ __all__ = [
     "welch_anova", "kruskal", "tukey_posthoc", "tost", "bayes_ttest",
     "correlation", "regression", "chi_square", "power_analysis", "correct_pvalues",
     "anova_table", "residual_diagnostics", "pairwise_effects",
+    "two_way_anova", "ancova",
 ]
