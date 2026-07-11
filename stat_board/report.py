@@ -1,0 +1,135 @@
+"""Render a Markdown report to PDF — pure Python, no LaTeX or headless browser.
+
+Pipeline: Markdown -> HTML (python-markdown, with tables) -> PDF (PyMuPDF's
+Story layout engine). Used by the /stat-board skill so the final report always
+ships as a PDF.
+
+    python3 -m stat_board.report <input.md> [output.pdf]
+
+If the output path is omitted it is the input path with a .pdf suffix.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import markdown as _md
+import pymupdf
+
+# A print stylesheet Story understands (it supports a practical subset of CSS).
+_CSS = """
+* { font-family: sans-serif; }
+body { font-size: 10pt; line-height: 1.4; color: #1a1a1a; }
+h1 { font-size: 19pt; margin: 0 0 6pt 0; color: #ffffff;
+     background-color: #0f5e6e; padding: 10pt 12pt; }
+h2 { font-size: 13pt; margin: 14pt 0 4pt 0; color: #0b3d47;
+     background-color: #cbeef0; padding: 5pt 10pt; }
+h3 { font-size: 11pt; margin: 10pt 0 3pt 0; color: #0f5e6e; }
+p { margin: 4pt 0; }
+em { color: #555; }
+code { font-family: monospace; background: #f2f2f2; font-size: 9pt; }
+table { width: 100%; border-collapse: collapse; margin: 6pt 0; font-size: 9pt; }
+th { background: #f0f0f0; text-align: left; padding: 4pt 6pt;
+     border: 1px solid #cccccc; }
+td { padding: 4pt 6pt; border: 1px solid #dddddd; vertical-align: top; }
+li { margin: 2pt 0; }
+"""
+
+
+def _shrink(path: Path) -> None:
+    """Subset embedded fonts and recompress. PyMuPDF's Story embeds full fonts,
+    which dominate the file size (a Unicode fallback face alone can be >1 MB);
+    subsetting to the glyphs actually used typically shrinks the PDF ~10x. Never
+    fails the render over optimization."""
+    try:
+        doc = pymupdf.open(path)
+        try:
+            doc.subset_fonts(verbose=False)
+        except Exception:
+            pass  # older PyMuPDF without subset_fonts — deflate below still helps
+        tmp = path.with_suffix(".slim.pdf")
+        doc.save(tmp, garbage=4, deflate=True, clean=True)
+        doc.close()
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
+def markdown_to_pdf(md_text: str, out_path: str | Path, *, title: str | None = None,
+                    image_root: str | Path | None = None) -> Path:
+    """Convert Markdown text to a PDF file. Returns the output path. If
+    ``image_root`` is given, ``<img src="name.png">`` tags resolve against it."""
+    out_path = Path(out_path)
+    body = _md.markdown(
+        md_text,
+        extensions=["tables", "fenced_code", "sane_lists", "md_in_html"],
+    )
+    head = f"<title>{title}</title>" if title else ""
+    html = f"<html><head>{head}<style>{_CSS}</style></head><body>{body}</body></html>"
+
+    archive = pymupdf.Archive(str(image_root)) if image_root else None
+    story = pymupdf.Story(html=html, archive=archive)
+    writer = pymupdf.DocumentWriter(str(out_path))
+    mediabox = pymupdf.paper_rect("letter")
+    frame = mediabox + (54, 54, -54, -54)  # 0.75in margins
+
+    more = 1
+    while more:
+        device = writer.begin_page(mediabox)
+        more, _ = story.place(frame)
+        story.draw(device)
+        writer.end_page()
+    writer.close()
+    _shrink(out_path)
+    return out_path
+
+
+def convert_file(in_path: str | Path, out_path: str | Path | None = None, *,
+                 data_path: str | None = None, group_col: str | None = None,
+                 value_col: str | None = None, alpha: float = 0.05) -> Path:
+    """Render a Markdown report to PDF. If ``data_path`` is given, a deterministic
+    appendix (figures + detailed statistics tables) computed from that dataset is
+    generated and appended before rendering."""
+    in_path = Path(in_path)
+    if out_path is None:
+        out_path = in_path.with_suffix(".pdf")
+    out_path = Path(out_path)
+    md_text = in_path.read_text()
+    image_root: Path | None = None
+
+    if data_path:
+        from . import appendix  # local import: keeps matplotlib off the fast path
+        built = appendix.build(data_path, group_col=group_col, value_col=value_col,
+                               alpha=alpha, assets_dir=out_path.parent / f"{out_path.stem}_assets")
+        if built is not None:
+            appendix_md, image_root = built
+            md_text = md_text.rstrip() + "\n" + appendix_md
+
+    title = next((ln[2:].strip() for ln in md_text.splitlines() if ln.startswith("# ")), None)
+    return markdown_to_pdf(md_text, out_path, title=title, image_root=image_root)
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python3 -m stat_board.report",
+        description="Render a Markdown report to PDF (optionally with a data-driven "
+                    "appendix of figures and detailed statistics tables).")
+    parser.add_argument("input", help="Markdown report file.")
+    parser.add_argument("output", nargs="?", help="Output PDF (default: input with .pdf).")
+    parser.add_argument("--data", help="Dataset to build the figures/tables appendix from.")
+    parser.add_argument("--group-col", help="Long-format: group-label column.")
+    parser.add_argument("--value-col", help="Long-format: value column.")
+    parser.add_argument("--alpha", type=float, default=0.05)
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+
+    out = convert_file(args.input, args.output, data_path=args.data,
+                       group_col=args.group_col, value_col=args.value_col, alpha=args.alpha)
+    print(f"wrote {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

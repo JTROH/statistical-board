@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "stat-board-webui",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "stat_board.webapp", "--port", "8643"],
+      "port": 8643
+    }
+  ]
+}

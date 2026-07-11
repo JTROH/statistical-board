@@ -1,0 +1,24 @@
+# --- Secrets: never commit ---------------------------------------------------
+.env
+.env.txt
+*.env
+!.env.example
+
+# --- Generated at runtime ----------------------------------------------------
+reports/
+uploads/
+*_assets/
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# --- Claude Code local settings (personal) -----------------------------------
+.claude/settings.local.json
+
+# --- OS ----------------------------------------------------------------------
+.DS_Store

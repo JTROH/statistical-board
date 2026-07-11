@@ -1,0 +1,16 @@
+# === Statistics engine (required for everything) ===
+numpy>=1.26
+scipy>=1.11
+pandas>=2.0
+statsmodels>=0.14
+
+# === PDF report with figures (report renderer) ===
+markdown>=3.5
+pymupdf>=1.24
+matplotlib>=3.7
+
+# === Standalone board: CLI orchestrator + web UI (needs an API key) ===
+# Not required to use the engine, the desktop GUI, or the Claude Code skills.
+anthropic>=0.70.0
+fastapi>=0.115
+uvicorn>=0.30

@@ -1,0 +1,137 @@
+"""Command-line front door to the engine. One subcommand per analysis; every
+run prints a single JSON object to stdout (errors go to stderr as JSON too, with
+a non-zero exit) so an agent can parse the result unambiguously.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from typing import Any
+
+from . import analyses
+from .data import DataError, load_groups
+
+
+def _add_data_args(p: argparse.ArgumentParser, *, needs_groups: bool = True) -> None:
+    if needs_groups:
+        p.add_argument("--data", required=True, help="CSV or JSON file of grouped values")
+        p.add_argument("--group-col", help="long-format: column holding group labels")
+        p.add_argument("--value-col", help="long-format: column holding values")
+    p.add_argument("--alpha", type=float, default=0.05, help="significance level (default 0.05)")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m stat_board.engine",
+        description="Statistics engine — JSON in, JSON out.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    for name in ["describe", "assumptions", "mannwhitney", "anova",
+                 "welch-anova", "kruskal", "tukey"]:
+        _add_data_args(sub.add_parser(name))
+
+    t = sub.add_parser("ttest"); _add_data_args(t)
+    t.add_argument("--paired", action="store_true")
+    t.add_argument("--equal-var", action="store_true", help="Student's t (default is Welch)")
+
+    b = sub.add_parser("bayes-ttest"); _add_data_args(b)
+    b.add_argument("--paired", action="store_true")
+    b.add_argument("--r", type=float, default=0.707, help="Cauchy prior scale")
+
+    to = sub.add_parser("tost"); _add_data_args(to)
+    to.add_argument("--low", type=float)
+    to.add_argument("--high", type=float)
+    to.add_argument("--margin-pct", type=float, help="symmetric bound as %% of |mean of group1|")
+
+    c = sub.add_parser("correlation"); _add_data_args(c)
+    c.add_argument("--method", choices=["pearson", "spearman", "kendall"], default="pearson")
+
+    r = sub.add_parser("regression")
+    r.add_argument("--data", required=True)
+    r.add_argument("--formula", required=True, help="patsy formula, e.g. 'y ~ x1 + x2'")
+    r.add_argument("--alpha", type=float, default=0.05)
+
+    ch = sub.add_parser("chisquare")
+    ch.add_argument("--table", required=True, help="JSON 2D array, e.g. '[[10,20],[30,40]]'")
+    ch.add_argument("--alpha", type=float, default=0.05)
+
+    pw = sub.add_parser("power")
+    pw.add_argument("--test", choices=["ttest", "anova"], default="ttest")
+    pw.add_argument("--effect-size", type=float, required=True)
+    pw.add_argument("--n", type=float, help="n per group (omit to solve for it)")
+    pw.add_argument("--power", type=float, help="target power (omit to solve for it)")
+    pw.add_argument("--k-groups", type=int, default=None,
+                    help="number of groups (REQUIRED for --test anova)")
+    pw.add_argument("--alpha", type=float, default=0.05)
+
+    mc = sub.add_parser("correct")
+    mc.add_argument("--pvalues", required=True, help="JSON array, e.g. '[0.01,0.04,0.2]'")
+    mc.add_argument("--method", default="fdr_bh",
+                    help="fdr_bh, bonferroni, holm, ... (statsmodels names)")
+    mc.add_argument("--alpha", type=float, default=0.05)
+
+    return parser
+
+
+def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
+    cmd = args.command
+
+    if cmd in {"describe", "assumptions", "ttest", "mannwhitney", "anova",
+               "welch-anova", "kruskal", "tukey", "bayes-ttest", "tost", "correlation"}:
+        groups = load_groups(
+            args.data,
+            group_col=getattr(args, "group_col", None),
+            value_col=getattr(args, "value_col", None),
+        )
+
+    if cmd == "describe":
+        return analyses.describe(groups, args.alpha)
+    if cmd == "assumptions":
+        return analyses.check_assumptions(groups, args.alpha)
+    if cmd == "ttest":
+        return analyses.ttest(groups, paired=args.paired, equal_var=args.equal_var, alpha=args.alpha)
+    if cmd == "mannwhitney":
+        return analyses.mann_whitney(groups, alpha=args.alpha)
+    if cmd == "anova":
+        return analyses.anova(groups, alpha=args.alpha)
+    if cmd == "welch-anova":
+        return analyses.welch_anova(groups, alpha=args.alpha)
+    if cmd == "kruskal":
+        return analyses.kruskal(groups, alpha=args.alpha)
+    if cmd == "tukey":
+        return analyses.tukey_posthoc(groups, alpha=args.alpha)
+    if cmd == "bayes-ttest":
+        return analyses.bayes_ttest(groups, paired=args.paired, r=args.r, alpha=args.alpha)
+    if cmd == "tost":
+        return analyses.tost(groups, low=args.low, high=args.high,
+                             margin_pct=args.margin_pct, alpha=args.alpha)
+    if cmd == "correlation":
+        return analyses.correlation(groups, method=args.method, alpha=args.alpha)
+    if cmd == "regression":
+        return analyses.regression(args.data, args.formula, alpha=args.alpha)
+    if cmd == "chisquare":
+        return analyses.chi_square(json.loads(args.table), alpha=args.alpha)
+    if cmd == "power":
+        return analyses.power_analysis(
+            test=args.test, effect_size=args.effect_size, n=args.n,
+            power=args.power, alpha=args.alpha, k_groups=args.k_groups,
+        )
+    if cmd == "correct":
+        return analyses.correct_pvalues(json.loads(args.pvalues), method=args.method, alpha=args.alpha)
+    raise ValueError(f"unknown command: {cmd}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        result = _dispatch(args)
+    except (DataError, ValueError) as exc:
+        json.dump({"error": type(exc).__name__, "message": str(exc)}, sys.stderr)
+        sys.stderr.write("\n")
+        return 2
+    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
