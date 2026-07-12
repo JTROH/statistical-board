@@ -104,7 +104,8 @@ def load_groups(
             f"numeric columns {numeric}). For a ONE-factor comparison, pass "
             f"--group-col <factor> --value-col <outcome>. For a MULTI-factor design, "
             f"use the two-way-anova / ancova / regression commands (they take "
-            f"--value / --factor / --covariate)."
+            f"--value / --factor / --covariate). To clean/reshape a messy file first, "
+            f"run `python -m stat_board.prep profile --data <file>`."
         )
 
     # Wide: every column is numeric → each is a group.

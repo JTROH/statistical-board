@@ -44,6 +44,26 @@ You can run it two ways:
 pip install -r requirements.txt
 ```
 
+## Preparing a messy file first (optional pre-step)
+
+Real files often aren't analysis-ready — a title banner before the header, dates
+stored as text, a strongly skewed column that wants a log. `stat_board.prep`
+profiles a file and applies a **reproducible cleaning recipe** (it never touches
+the original):
+
+```bash
+python3 -m stat_board.prep profile --data raw.csv     # inspect: preamble, types, skew, roles, flags
+python3 -m stat_board.prep suggest --data raw.csv     # a proposed recipe (JSON) with reasons
+python3 -m stat_board.prep auto    --data raw.csv --out clean.csv   # apply the suggestion + save the recipe
+```
+
+Recipe ops: `skip_rows` (preamble), `rename`, `drop`/`select`, `coerce` (strip
+$/commas), `parse_date` (→ year/decade), `date_diff`, `transform`
+(log10/log1p/sqrt/z-score/Box-Cox), `bin` (decade/quantile/median-split),
+`filter`, `dropna`/`fillna`, `dedupe`, `winsorize`. The `/stat-prep` skill does
+this interactively — profile, **propose a recipe, confirm, apply**, then hand off
+to `/stat-board`.
+
 ## The four ways to use it
 
 ### 1. The engine directly (no key)
@@ -91,6 +111,7 @@ python3 -m stat_board "Any question" --data sample_data/wide.csv --dry-run
 ### 4. Claude Code skills (no key, runs on your Claude Code session)
 Open this folder in Claude Code (a fresh session) and run:
 ```
+/stat-prep data=raw.csv  # profile, propose a cleaning recipe, confirm, apply
 /stat-board data=sample_data/long.csv question="Do the three groups differ?"
 /stat-advisor            # interactive statistical consultant
 ```
@@ -115,9 +136,10 @@ python3 -m stat_board.report examples/sample_report.md out.pdf \
 ## Layout
 
 ```
-stat_board/            the package: engine/ + orchestrator, prompts, report, web UI
+stat_board/            the package: engine/ + prep, orchestrator, prompts, report, web UI
   engine/              pure-Python statistics core (no LLM)
-.claude/               Claude Code agents (stat-*) and skills (stat-board, stat-advisor)
+  prep.py              data profiling + reproducible cleaning recipes
+.claude/               Claude Code agents (stat-*) and skills (stat-prep, stat-board, stat-advisor)
 desktop_gui/           tkinter GUI, backed by the engine
 sample_data/           synthetic example datasets
 examples/              a full generated sample report (PDF + Markdown + transcript)

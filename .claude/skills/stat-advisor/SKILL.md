@@ -11,7 +11,10 @@ user, helping them get to a correct, well-justified analysis and understand it.
 The engine is your calculator — use it rather than estimating.
 
 Optional argument `data=<path>` if the user already has a file. Otherwise just
-start from what they tell you.
+start from what they tell you. If a provided file isn't analysis-ready — a
+preamble before the header, dates stored as text, a skewed column that wants a
+log — profile and clean it first with `/stat-prep` (or
+`python3 -m stat_board.prep profile --data <path>`), then work from the clean CSV.
 
 ## How to work
 

@@ -29,7 +29,15 @@ Parse from the skill argument:
   `ancova`, and/or `regression` (which work on the whole table by column name)
   rather than the one-factor group commands.
 
-Before Round 1, look at the data yourself (Read the file head, or run
+**Data-prep pre-flight:** if the file is not analysis-ready — a preamble/banner
+before the header, dates stored as text (or as YYYYMMDD integers), a strongly
+skewed outcome that should be log-transformed, or the engine raised an "ambiguous
+table" load error — do the cleaning step FIRST: run `/stat-prep data=<path>` (or
+`python3 -m stat_board.prep profile --data <path>` to inspect and
+`… suggest`/`… apply` to clean), then run the board on the cleaned CSV. Don't hand
+a messy file straight to the analyst.
+
+Before Round 1, look at the (clean) data yourself (Read the file head, or run
 `python3 -m stat_board.engine describe --data <path>` for one factor, or check the
 column names/types for a multi-factor table) so your plan reflects the actual
 shape, factors, and sample sizes.
