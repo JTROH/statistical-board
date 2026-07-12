@@ -480,6 +480,99 @@ def ancova(path: str, *, value: str, factors: list[str], covariates: list[str],
     return out
 
 
+def _count_coefs(model, alpha: float, skip: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Coefficient table for a count model, reported as incidence-rate ratios
+    (IRR = exp(coef): the multiplicative change in the event rate per unit)."""
+    ci = model.conf_int(alpha)
+    out = {}
+    for name in model.params.index:
+        if name in skip:
+            continue
+        out[name] = {
+            "coef": float(model.params[name]),
+            "irr": float(np.exp(model.params[name])),
+            "irr_ci": [float(np.exp(ci.loc[name][0])), float(np.exp(ci.loc[name][1]))],
+            "p": float(model.pvalues[name]),
+            "significant": bool(model.pvalues[name] < alpha),
+        }
+    return out
+
+
+def poisson_regression(path: str, formula: str, *, exposure: str | None = None,
+                       alpha: float = 0.05) -> dict[str, Any]:
+    """Poisson rate regression (log link) for COUNT data, e.g. events per period:
+    `count ~ year`. Coefficients are reported as incidence-rate ratios (IRR).
+    Includes an overdispersion check (Pearson χ²/df); if it's >> 1 the counts are
+    overdispersed and `negbin` should be used instead. Pass ``exposure`` (a column)
+    to model a *rate* when periods differ in length/exposure (adds a log offset)."""
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+    df = load_dataframe(path)
+    offset = np.log(df[exposure].astype(float)) if exposure else None
+    model = smf.glm(formula, data=df, family=sm.families.Poisson(), offset=offset).fit()
+    disp = float(model.pearson_chi2 / model.df_resid)
+    out = {
+        "analysis": "poisson_regression",
+        "formula": formula,
+        "n": int(model.nobs),
+        "coefficients": _count_coefs(model, alpha),
+        "aic": float(model.aic),
+        "deviance": float(model.deviance),
+        "df_resid": int(model.df_resid),
+        "overdispersion": {
+            "dispersion": disp,
+            "pearson_chi2": float(model.pearson_chi2),
+            "overdispersed": bool(disp > 1.5),
+            "recommendation": ("dispersion >> 1 → refit with negative binomial (negbin)"
+                               if disp > 1.5 else "dispersion ≈ 1 → Poisson is adequate"),
+        },
+    }
+    if exposure:
+        out["exposure"] = exposure
+    return out
+
+
+def negbin_regression(path: str, formula: str, *, exposure: str | None = None,
+                      alpha: float = 0.05) -> dict[str, Any]:
+    """Negative-binomial rate regression for OVERDISPERSED count data (variance >
+    mean). Like `poisson` but estimates an extra dispersion parameter (alpha); use
+    it when the Poisson overdispersion check flags a problem. IRR-reported."""
+    import warnings
+
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+    df = load_dataframe(path)
+    kwargs = {"exposure": df[exposure].astype(float)} if exposure else {}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model = smf.negativebinomial(formula, data=df, **kwargs).fit(disp=0)
+    converged = bool(getattr(model, "mle_retvals", {}).get("converged", True))
+    bse_ok = bool(np.isfinite(np.asarray(model.bse, float)).all())
+    out = {
+        "analysis": "negbin_regression",
+        "formula": formula,
+        "n": int(model.nobs),
+        "coefficients": _count_coefs(model, alpha, skip=("alpha",)),
+        "dispersion_alpha": float(model.params.get("alpha", float("nan"))),
+        "converged": converged and bse_ok,
+        "aic": float(model.aic),
+        "bic": float(model.bic),
+        "llf": float(model.llf),
+    }
+    if not (converged and bse_ok):
+        out["warning"] = (
+            "negative-binomial MLE did not converge / has no standard errors — most "
+            "often because the counts are NOT overdispersed (dispersion alpha → 0, so "
+            "Poisson is the correct model), or a large-magnitude predictor needs "
+            "centering (e.g. use I(year - min)). Prefer the Poisson fit here.")
+    if exposure:
+        out["exposure"] = exposure
+    return out
+
+
 def chi_square(table: list[list[float]], *, alpha: float = 0.05) -> dict[str, Any]:
     """Chi-square test of independence on a contingency table."""
     arr = np.asarray(table, float)

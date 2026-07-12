@@ -21,7 +21,9 @@ from .analyses import (
     ancova,
     kruskal,
     mann_whitney,
+    negbin_regression,
     pairwise_effects,
+    poisson_regression,
     power_analysis,
     regression,
     residual_diagnostics,
@@ -38,5 +40,5 @@ __all__ = [
     "welch_anova", "kruskal", "tukey_posthoc", "tost", "bayes_ttest",
     "correlation", "regression", "chi_square", "power_analysis", "correct_pvalues",
     "anova_table", "residual_diagnostics", "pairwise_effects",
-    "two_way_anova", "ancova",
+    "two_way_anova", "ancova", "poisson_regression", "negbin_regression",
 ]

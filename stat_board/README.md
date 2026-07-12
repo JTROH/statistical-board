@@ -54,6 +54,8 @@ python3 -m stat_board.engine <command> --data <file.csv|.json> [options]
 | **`two-way-anova --value V --factor F1 --factor F2`** | Factorial ANOVA (main effects + interactions), partial η² |
 | **`ancova --value V --factor F --covariate C`** | Factor(s) adjusted for numeric covariate(s) |
 | **`regression --formula "y ~ x1 + x2 + C(g)"`** | OLS + ANOVA term table + residual diagnostics |
+| **`poisson --formula "n ~ year" [--exposure col]`** | Poisson rate regression (IRR) + overdispersion check |
+| **`negbin --formula "n ~ year"`** | Negative-binomial rate regression for overdispersed counts |
 
 Data shapes: for one-factor comparisons — **wide** CSV (one column per group),
 **long** CSV (`--group-col`/`--value-col`), or **JSON** `{"A": [...], "B": [...]}`.

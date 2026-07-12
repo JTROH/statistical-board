@@ -429,6 +429,27 @@ def _op_dedupe(df, op, rep):
     return df
 
 
+def _op_aggregate(df, op, rep):
+    """Collapse rows to counts per group — turns an event log into a counts table
+    for rate/Poisson modeling. `complete` fills a gap-free integer range with 0s."""
+    by = op["group_by"] if isinstance(op["group_by"], list) else [op["group_by"]]
+    name = op.get("count_name", "n")
+    g = df.groupby(by, dropna=False).size().reset_index(name=name)
+    comp = op.get("complete")
+    if comp:
+        col = comp["column"]
+        lo = int(comp.get("from", g[col].min()))
+        hi = int(comp.get("to", g[col].max()))
+        full = pd.DataFrame({col: range(lo, hi + 1)})
+        keep = [c for c in g.columns if c != name]
+        g = full.merge(g, on=col, how="left") if keep == [col] else \
+            full.merge(g, on=col, how="right")
+        g[name] = g[name].fillna(0).astype(int)
+        g = g.sort_values(col).reset_index(drop=True)
+    rep["detail"] = {"group_by": by, "count_name": name, "rows": int(len(g))}
+    return g
+
+
 def _op_winsorize(df, op, rep):
     c = op["column"]
     lo, hi = op.get("limits", [0.01, 0.01])
@@ -443,7 +464,7 @@ _OPS = {
     "rename": _op_rename, "drop": _op_drop, "select": _op_select, "coerce": _op_coerce,
     "parse_date": _op_parse_date, "date_diff": _op_date_diff, "transform": _op_transform,
     "bin": _op_bin, "filter": _op_filter, "dropna": _op_dropna, "fillna": _op_fillna,
-    "dedupe": _op_dedupe, "winsorize": _op_winsorize,
+    "dedupe": _op_dedupe, "winsorize": _op_winsorize, "aggregate": _op_aggregate,
 }
 
 

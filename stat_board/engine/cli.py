@@ -72,6 +72,13 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("--type", type=int, choices=[1, 2, 3], default=2, dest="typ")
     an.add_argument("--alpha", type=float, default=0.05)
 
+    for cnt in ("poisson", "negbin"):
+        cp = sub.add_parser(cnt, help=f"{cnt} rate regression for count data (IRR-reported)")
+        cp.add_argument("--data", required=True)
+        cp.add_argument("--formula", required=True, help="e.g. 'n ~ year' (count column ~ predictors)")
+        cp.add_argument("--exposure", help="column giving per-row exposure (adds a log offset for rates)")
+        cp.add_argument("--alpha", type=float, default=0.05)
+
     ch = sub.add_parser("chisquare")
     ch.add_argument("--table", required=True, help="JSON 2D array, e.g. '[[10,20],[30,40]]'")
     ch.add_argument("--alpha", type=float, default=0.05)
@@ -136,6 +143,12 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if cmd == "ancova":
         return analyses.ancova(args.data, value=args.value, factors=args.factors,
                                covariates=args.covariates, typ=args.typ, alpha=args.alpha)
+    if cmd == "poisson":
+        return analyses.poisson_regression(args.data, args.formula,
+                                           exposure=args.exposure, alpha=args.alpha)
+    if cmd == "negbin":
+        return analyses.negbin_regression(args.data, args.formula,
+                                          exposure=args.exposure, alpha=args.alpha)
     if cmd == "chisquare":
         return analyses.chi_square(json.loads(args.table), alpha=args.alpha)
     if cmd == "power":

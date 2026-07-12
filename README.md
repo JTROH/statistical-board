@@ -60,7 +60,8 @@ python3 -m stat_board.prep auto    --data raw.csv --out clean.csv   # apply the 
 Recipe ops: `skip_rows` (preamble), `rename`, `drop`/`select`, `coerce` (strip
 $/commas), `parse_date` (→ year/decade), `date_diff`, `transform`
 (log10/log1p/sqrt/z-score/Box-Cox), `bin` (decade/quantile/median-split),
-`filter`, `dropna`/`fillna`, `dedupe`, `winsorize`. The `/stat-prep` skill does
+`aggregate` (events → counts per period, for rate models), `filter`,
+`dropna`/`fillna`, `dedupe`, `winsorize`. The `/stat-prep` skill does
 this interactively — profile, **propose a recipe, confirm, apply**, then hand off
 to `/stat-board`.
 
@@ -75,13 +76,17 @@ python3 -m stat_board.engine welch-anova --data sample_data/wide.csv
 One-factor commands: `describe`, `assumptions`, `ttest`, `mannwhitney`, `anova`,
 `welch-anova`, `kruskal`, `tukey`, `tost`, `bayes-ttest`, `correlation`,
 `chisquare`, `power`, `correct`. **Multi-factor** (whole table, by column name):
-`two-way-anova`, `ancova`, `regression`. JSON in, JSON out.
+`two-way-anova`, `ancova`, `regression`. **Count/rate** (events per period):
+`poisson`, `negbin`. JSON in, JSON out.
 
 ```bash
 # multi-factor examples
 python3 -m stat_board.engine two-way-anova --data data.csv --value score --factor treatment --factor sex
 python3 -m stat_board.engine ancova       --data data.csv --value score --factor treatment --covariate age
 python3 -m stat_board.engine regression   --data data.csv --formula "score ~ treatment * sex + age"
+
+# count/rate: how many events per period? (incidence-rate ratios + overdispersion check)
+python3 -m stat_board.engine poisson --data counts_per_year.csv --formula "n ~ I(year - 1980)"
 ```
 
 ### 2. Desktop GUI (no key)

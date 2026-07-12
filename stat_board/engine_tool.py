@@ -19,7 +19,8 @@ _GROUP_COMMANDS = {
     "kruskal", "tukey", "tost", "bayes-ttest", "correlation",
 }
 # Commands that run on the whole table by column name (multi-factor / standalone).
-_STANDALONE = {"regression", "two-way-anova", "ancova", "chisquare", "power", "correct"}
+_STANDALONE = {"regression", "two-way-anova", "ancova", "poisson", "negbin",
+               "chisquare", "power", "correct"}
 
 TOOL_NAME = "run_stat"
 
@@ -37,7 +38,9 @@ def build_tool() -> dict[str, Any]:
             "grouping factor. MULTI-FACTOR commands work by column name on the whole "
             "table: two-way-anova (2+ categorical factors + interactions), ancova "
             "(factor(s) + numeric covariate(s)), and regression (a patsy formula). "
-            "chisquare/power/correct carry their data in the parameters."
+            "For COUNT/frequency data (events per period), poisson and negbin are "
+            "rate regressions (report incidence-rate ratios). chisquare/power/correct "
+            "carry their data in the parameters."
         ),
         "input_schema": {
             "type": "object",
@@ -62,6 +65,7 @@ def build_tool() -> dict[str, Any]:
                 "covariates": {"type": "array", "items": {"type": "string"},
                                "description": "ancova: numeric covariate columns."},
                 "typ": {"type": "integer", "description": "regression/two-way-anova/ancova: ANOVA SS type 1|2|3 (default 2)."},
+                "exposure": {"type": "string", "description": "poisson/negbin: column of per-row exposure (adds a log offset for rates)."},
                 "table": {"type": "array", "items": {"type": "array", "items": {"type": "number"}},
                           "description": "chisquare: 2D contingency table."},
                 "pvalues": {"type": "array", "items": {"type": "number"}, "description": "correct: raw p-values."},
@@ -128,6 +132,12 @@ def make_executor(
             elif cmd == "ancova":
                 res = analyses.ancova(data_path, value=inp["value"], factors=inp["factors"],
                                       covariates=inp["covariates"], typ=inp.get("typ", 2), alpha=a)
+            elif cmd == "poisson":
+                res = analyses.poisson_regression(data_path, inp["formula"],
+                                                  exposure=inp.get("exposure"), alpha=a)
+            elif cmd == "negbin":
+                res = analyses.negbin_regression(data_path, inp["formula"],
+                                                 exposure=inp.get("exposure"), alpha=a)
             elif cmd == "chisquare":
                 res = analyses.chi_square(inp["table"], alpha=a)
             elif cmd == "power":

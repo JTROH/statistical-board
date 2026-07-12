@@ -49,6 +49,9 @@ Work the plan the judge gave you:
    (factor(s) adjusted for covariate(s)), and/or `regression` (a patsy formula).
    Report every model term's F, p, and partial eta^2, plus the residual
    diagnostics (normality of residuals, Durbin–Watson).
+   For a COUNT / FREQUENCY question (how many events per period), model the counts,
+   not an average: use `poisson` rate regression (report incidence-rate ratios),
+   check its overdispersion diagnostic, and switch to `negbin` if overdispersed.
 4. Report the exact numbers the tool returned — do not round or reword them.
    Organize by test, and state which command (with parameters) produced each.
 
