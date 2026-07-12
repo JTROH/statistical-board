@@ -48,7 +48,13 @@ Work the plan the judge gave you:
    commands. Use `two-way-anova` (factors + their interactions), `ancova`
    (factor(s) adjusted for covariate(s)), and/or `regression` (a patsy formula).
    Report every model term's F, p, and partial eta^2, plus the residual
-   diagnostics (normality of residuals, Durbin–Watson).
+   diagnostics (normality of residuals, Durbin–Watson). If SEVERAL OUTCOMES are
+   named, fit a separate model for each and report the pairwise correlation(s)
+   among them. To find the factor settings that OPTIMIZE a response (DoE /
+   response-surface), fit a quadratic model (linear + squared + interaction terms,
+   e.g. `y ~ x + I(x**2) + x:z`) and identify the settings/region of highest
+   predicted response (a grid search over the observed factor ranges, run via a
+   short Bash python script, is fine and is reproducible by the verifier).
    For a COUNT / FREQUENCY question (how many events per period), model the counts,
    not an average: use `poisson` rate regression (report incidence-rate ratios),
    check its overdispersion diagnostic, and switch to `negbin` if overdispersed.

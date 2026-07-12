@@ -110,18 +110,29 @@ async def run(
     local_tools = {engine_tool.TOOL_NAME: executor}
     tool_specs = [engine_tool.build_tool()]
 
-    multifactor = bool(factors) or bool(covariates)
+    # An outcome field may name several responses (comma-separated) → multi-outcome.
+    outcomes = [o.strip() for o in (value_col or "").split(",") if o.strip()]
+    multi_outcome = len(outcomes) > 1
+    multifactor = bool(factors) or bool(covariates) or multi_outcome
     if multifactor:
-        data_desc = _describe_table(data_path, value_col or "?", factors or [], covariates)
+        data_desc = _describe_table(data_path, ", ".join(outcomes) or (value_col or "?"),
+                                    factors or [], covariates)
+        outcome_note = (f" MULTIPLE OUTCOMES: fit a SEPARATE model for EACH of "
+                        f"{outcomes} (one model per response), and also report the "
+                        f"pairwise correlation(s) among the outcomes." if multi_outcome else "")
         design_note = (
             "MULTI-FACTOR design. Analyze the whole table by column name with the "
-            "run_stat multi-factor commands: `two-way-anova` (main effects + "
-            "interactions of the factors), `ancova` (factors adjusted for the "
-            "covariates), and/or `regression` (a patsy formula). The one-factor "
-            "group commands (anova/ttest/tukey) do NOT apply to this design.")
-        instructions = ("First round: run two-way-anova over the factors (and ancova "
-                        "if covariates are given), report every term's F, p and "
-                        "partial eta^2, and check the residual diagnostics.")
+            "run_stat commands: `regression` (a patsy formula — use this for continuous "
+            "predictors / DoE factors, and add squared and interaction terms, e.g. "
+            "'y ~ x + I(x**2) + x:z', when the goal is to optimize or find best ranges); "
+            "`two-way-anova` (categorical factors + interactions); `ancova` (factor(s) + "
+            "numeric covariate(s)). The one-factor group commands do NOT apply." + outcome_note)
+        lead = (f"First round: for the outcome(s) {', '.join(outcomes)}, " if outcomes
+                else "First round: ")
+        instructions = (lead + "fit the design model with `regression` (add quadratic and "
+                        "interaction terms if the aim is to find optimal ranges), report "
+                        "coefficients, R^2 and residual diagnostics"
+                        + (", and the correlation between the outcomes." if multi_outcome else "."))
     else:
         load_hint = (f"Load with group column {group_col!r}, value column {value_col!r}."
                      if group_col else "Loaded automatically (wide CSV or JSON groups).")
