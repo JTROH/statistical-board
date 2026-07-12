@@ -513,7 +513,10 @@ def power_analysis(
     alpha: float = 0.05,
     k_groups: int | None = None,
 ) -> dict[str, Any]:
-    """Solve for whichever of {n per group, power} is left as None."""
+    """Solve for whichever of {n, power} is left as None. For a t-test, n is the
+    sample size **per group** (statsmodels nobs1); for ANOVA, n is the **total**
+    sample size across all groups (statsmodels nobs) — the output is labelled
+    accordingly so the number is never misread."""
     if (n is None) == (power is None):
         raise ValueError("leave exactly one of --n / --power unset to solve for it")
     if test == "anova":
@@ -528,15 +531,19 @@ def power_analysis(
         solved = analysis.solve_power(
             effect_size=effect_size, nobs1=n, alpha=alpha, power=power
         )
-    field = "required_n_per_group" if n is None else "achieved_power"
-    return {
+    n_label = "total_n" if test == "anova" else "n_per_group"
+    solved_label = f"required_{n_label}" if n is None else "achieved_power"
+    out: dict[str, Any] = {
         "analysis": "power",
         "test": test,
         "effect_size": effect_size,
         "alpha": alpha,
-        field: float(solved),
-        "given": {"n_per_group": n, "power": power},
+        solved_label: float(solved),
+        "given": {n_label: n, "power": power},
     }
+    if test == "anova":
+        out["k_groups"] = k_groups
+    return out
 
 
 def anova_table(groups: Groups, *, alpha: float = 0.05) -> dict[str, Any]:
