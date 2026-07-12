@@ -28,6 +28,7 @@ h2 { font-size: 13pt; margin: 14pt 0 4pt 0; color: #0b3d47;
 h3 { font-size: 11pt; margin: 10pt 0 3pt 0; color: #0f5e6e; }
 p { margin: 4pt 0; }
 em { color: #555; }
+h1 em, h1 code { color: #ffc55c; font-style: normal; background: none; }
 code { font-family: monospace; background: #f2f2f2; font-size: 9pt; }
 table { width: 100%; border-collapse: collapse; margin: 6pt 0; font-size: 9pt; }
 th { background: #f0f0f0; text-align: left; padding: 4pt 6pt;
@@ -37,13 +38,60 @@ li { margin: 2pt 0; }
 """
 
 
+# Background-fill colours used by the stylesheet (H1 teal, H2 light-teal, th/code
+# grays). PyMuPDF's Story re-draws these fills onto continuation pages where the
+# element does not actually belong — heading bands bleed into the top margin, and
+# table-header fills bleed mid-page behind the figures. Both are removed below.
+_BG_FILLS = [(0.06, 0.37, 0.43), (0.80, 0.93, 0.94), (0.94, 0.94, 0.94), (0.95, 0.95, 0.95)]
+
+
+def _is_bg_fill(f) -> bool:
+    return f is not None and any(
+        all(abs(a - b) < 0.04 for a, b in zip(f, c)) for c in _BG_FILLS)
+
+
+def _strip_top_bleed(doc) -> None:
+    """Remove Story's phantom background bands from continuation pages, leaving
+    text and images intact. A fill is a phantom if it either intrudes into the top
+    margin (a bled heading band over running text) or is a stylesheet background
+    colour with NO text on it (a bled table header — a legitimate band always has
+    its heading/header text). Best-effort; never fails the render."""
+    try:
+        frame_top = 54.0  # matches the 0.75in top margin used when placing the story
+        for pno in range(1, doc.page_count):
+            pg = doc[pno]
+            strays = []
+            for dr in pg.get_drawings():
+                f = dr.get("fill")
+                if f is None:
+                    continue
+                r = dr["rect"]
+                if r.width < 8 or r.height < 3:
+                    continue
+                top_bleed = r.y0 < frame_top - 3 and r.width > 120
+                phantom = (_is_bg_fill(f) and r.height < 40
+                           and not pg.get_textbox(r).strip())
+                if top_bleed or phantom:
+                    strays.append(r)
+            if not strays:
+                continue
+            for r in strays:
+                pg.add_redact_annot(r)
+            pg.apply_redactions(text=pymupdf.PDF_REDACT_TEXT_NONE,
+                                images=pymupdf.PDF_REDACT_IMAGE_NONE,
+                                graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED)
+    except Exception:
+        pass
+
+
 def _shrink(path: Path) -> None:
-    """Subset embedded fonts and recompress. PyMuPDF's Story embeds full fonts,
-    which dominate the file size (a Unicode fallback face alone can be >1 MB);
-    subsetting to the glyphs actually used typically shrinks the PDF ~10x. Never
-    fails the render over optimization."""
+    """Strip the Story top-margin bleed, subset embedded fonts, and recompress.
+    PyMuPDF's Story embeds full fonts, which dominate the file size (a Unicode
+    fallback face alone can be >1 MB); subsetting to the glyphs actually used
+    typically shrinks the PDF ~10x. Never fails the render over optimization."""
     try:
         doc = pymupdf.open(path)
+        _strip_top_bleed(doc)
         try:
             doc.subset_fonts(verbose=False)
         except Exception:
