@@ -1,21 +1,43 @@
 """Async wrapper around the Anthropic SDK for the statistical board.
 
-The notable feature is a *local* tool-execution loop: the Analyst and Verifier
-are given the `run_stat` engine tool, and when the model calls it we execute the
-computation in-process and feed the JSON back — so every claim is grounded in a
-real calculation. Every call streams, uses adaptive thinking + the configured
-effort level, and resumes paused turns.
+Adapted from the research board's llm.py. The one substantive addition is a
+*local* tool-execution loop: the Analyst and Verifier are given the `run_stat`
+engine tool, and when the model calls it we execute the computation in-process
+and feed the JSON back — the statistical analogue of storm's server-side web
+tools. Every call streams, uses adaptive thinking + the configured effort, and
+resumes paused turns.
 """
 
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from anthropic import AsyncAnthropic
 
 from . import config
+
+_STRAY_UNICODE_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _fix_stray_unicode_escapes(value: Any) -> Any:
+    """Replace literal backslash-u-escape TEXT (e.g. the six characters
+    '\\u2013') with the character it names. This is not JSON's own escaping —
+    json.loads already decodes real JSON string escapes — it's the model
+    occasionally typing escape notation as plain text (most often an em/en
+    dash or a Greek letter in a statistics report) instead of the actual
+    character. Recurses through the parsed structured-output object so every
+    string field is covered, not just `draft`."""
+    if isinstance(value, str):
+        return _STRAY_UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), value)
+    if isinstance(value, list):
+        return [_fix_stray_unicode_escapes(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _fix_stray_unicode_escapes(v) for k, v in value.items()}
+    return value
 
 
 @dataclass
@@ -68,6 +90,7 @@ def _stub_reply(
                 "rationale": "[dry-run] Stubbed rationale.",
                 "next_instructions": "",
                 "draft": "# [dry-run] Statistical report\n\nStubbed draft (no API calls).",
+                "model_formula": "", "model_factors": [], "model_typ": 0,
             }
         return AgentReply(text=json.dumps(data), stop_reason="end_turn")
 
@@ -163,4 +186,4 @@ def parse_json(text: str) -> dict[str, Any]:
         if cleaned.startswith("json"):
             cleaned = cleaned[4:]
         cleaned = cleaned.strip()
-    return json.loads(cleaned)
+    return _fix_stray_unicode_escapes(json.loads(cleaned))

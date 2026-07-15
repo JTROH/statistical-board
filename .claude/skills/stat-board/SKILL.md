@@ -14,6 +14,17 @@ reproduced, and a conclusion is not earned until the test that backs it was vali
 *and* survived the critics. Do not defer to any agent. Represent genuine
 uncertainty as uncertainty.
 
+**Audience for everything you write:** a scientist or engineer with basic
+statistics (means, SD, p-values, a t-test/ANOVA) — NOT a professional
+statistician. The first time the report uses a term beyond that baseline
+(Cook's distance, leverage, VIF, a Bayes factor, Type II/III sums of squares,
+η²/ω²/ε²/partial-η², TOST, an incidence-rate ratio, a multiple-comparison
+correction, a condition number, curvature/center points, ...), gloss it in one
+plain clause in the same sentence — never assume it's already known. Detailed/
+technical tables belong in the Appendix for readers who want them; the
+narrative sections (Methods, Results, Conclusion) should read cleanly even to
+someone who skips the Appendix entirely.
+
 ## Inputs
 
 Parse from the skill argument:
@@ -27,7 +38,10 @@ Parse from the skill argument:
   a numeric covariate (e.g. `factors=treatment,sex covariate=age value=score`),
   this is a multi-factor analysis. Tell the analyst to use `two-way-anova`,
   `ancova`, and/or `regression` (which work on the whole table by column name)
-  rather than the one-factor group commands.
+  rather than the one-factor group commands, and to also run the DoE diagnostics
+  (`predict`, `vif`, `design-coverage`, `doe-optimum` — see `.claude/agents/
+  stat-analyst.md`) every round — these ground the "Recommended Next
+  Experiments" section required in Phase 3 for this kind of analysis.
 
 **Data-prep pre-flight:** if the file is not analysis-ready — a preamble/banner
 before the header, dates stored as text (or as YYYYMMDD integers), a strongly
@@ -61,7 +75,9 @@ Subagents share no context with you — include everything.
 
 1. **Analyze** — spawn `stat-analyst` with the data path and the tests this round
    needs. It runs the engine and returns the exact JSON: descriptives,
-   assumptions, the tests, effect sizes, and the Bayesian counterpart.
+   assumptions, the tests, effect sizes, and the Bayesian counterpart. For a
+   multi-factor/DoE design, it also runs the four DoE diagnostics (predict, vif,
+   design-coverage, doe-optimum) — never let it skip these for a DoE analysis.
 2. **Critique in parallel** — spawn `stat-frequentist`, `stat-assumptions`, and
    `stat-bayesian` **in a single message** (parallel calls). Give each the
    question, the analyst's results, and the current draft.
@@ -92,27 +108,63 @@ The final report always ships as a **PDF**.
 1. Compose the report in Markdown and write it to
    `reports/<question-slug>-<YYYYMMDD-HHMMSS>.md` (this is the source the PDF is
    rendered from — keep it). It contains:
+   - A one-to-two-sentence **orientation right under the title**: "Read
+     Conclusion for the answer; Methods explains why this test was chosen;
+     Appendix has full technical detail for anyone checking the numbers."
    - The hypothesis and the alpha.
    - A **Methods** note: which test was used and *why that one* (the assumption
      evidence that selected it).
-   - **Results**: the numbers, each with effect size + CI and the Bayes factor.
+   - **Results**: the numbers, each with effect size + CI and the Bayes factor —
+     phrase any cited Bayes factor as a plain comparison the first time (e.g.
+     "the data are about 12x more consistent with a real difference than with
+     none (Bayes factor ≈ 12)"), never a bare "BF10=12.3 (strong)".
    - **Conclusion**: the answer to the question, in plain language, correctly
      hedged — significance is not importance, and "no difference" is stated as
-     equivalence (TOST) or a Bayes factor for the null, never as a bare failed test.
+     equivalence (TOST) or a Bayes factor for the null, never as a bare failed
+     test. Lead with ONE primary effect size in plain terms (Cohen's d for two
+     groups, η² for ANOVA/regression); the rest of that test's effect-size
+     family (Hedges' g, ω², ε², partial-η², ...) stays in the Appendix, not
+     stacked inline here.
    - A **Limitations** section: assumption caveats, power, outliers.
+   - **Multi-factor/DoE analyses ONLY**: a **Recommended Next Experiments**
+     section, written strictly from the analyst's/verifier's `predict`, `vif`,
+     `design-coverage`, and `doe-optimum` results (e.g. confirmation runs for
+     high-Cook's-D points, center/axial points if curvature was untested or
+     underpowered, extending a factor's range if the best setting sits at its
+     tested boundary, resolving a high-VIF confound). Never invent a
+     recommendation the diagnostics don't support.
 2. **Render the PDF** — the deliverable — by running, from the project root, and
-   **passing the dataset** so the renderer appends a deterministic appendix of
-   figures (box plot, means ± CI, residual Q-Q and residuals-vs-fitted) plus
-   detailed tables (descriptives, the ANOVA source table, goodness-of-fit
-   R²/η²/ω²/ε², residual diagnostics, and scaled pairwise effect sizes):
-   ```
-   python3 -m stat_board.report reports/<question-slug>-<YYYYMMDD-HHMMSS>.md \
-       --data <the dataset path> [--group-col NAME --value-col NAME] [--alpha A]
-   ```
-   This writes `reports/<same-base>.pdf` (figures land in a `<same-base>_assets/`
-   folder). Confirm the command printed `wrote ...` and the `.pdf` exists; if the
-   render errors, report the error rather than claiming a PDF was produced. (Omit
-   `--data` only if the analysis wasn't over a grouped dataset.)
+   **passing the dataset** so the renderer appends a deterministic appendix
+   computed straight from the data (never hand-roll a one-off plotting/analysis
+   script for this — the renderer's output is what the verifier independently
+   reproduces):
+   - **One-factor/grouped analysis** — figures (box plot, means ± CI, residual
+     Q-Q and residuals-vs-fitted) plus tables (descriptives, the ANOVA source
+     table, goodness-of-fit R²/η²/ω²/ε², residual diagnostics, and scaled
+     pairwise effect sizes):
+     ```
+     python3 -m stat_board.report reports/<question-slug>-<YYYYMMDD-HHMMSS>.md \
+         --data <the dataset path> [--group-col NAME --value-col NAME] [--alpha A]
+     ```
+   - **Multi-factor/DoE analysis** — pass the exact fitted formula (regression/
+     two-way-anova/ancova all reduce to one patsy formula — see `formula_for` in
+     `stat_board/engine/analyses.py` if you need to reconstruct it from factors/
+     covariates) and its factor columns, instead of `--group-col`/`--value-col`;
+     this renders the predicted-vs-observed/residual/Pareto-of-effects figures
+     (plus a contour plot when exactly 2 continuous factors are given) and the
+     model/design-diagnostics tables (coefficients, ANOVA terms, leverage/Cook's
+     D, VIF, design coverage, curvature, and the ranked tested-combination table
+     — the fact base for Recommended Next Experiments):
+     ```
+     python3 -m stat_board.report reports/<question-slug>-<YYYYMMDD-HHMMSS>.md \
+         --data <the dataset path> --formula "<the exact fitted formula>" \
+         --factor F1 --factor F2 [--type 2] [--alpha A]
+     ```
+   Either way this writes `reports/<same-base>.pdf` (figures land in a
+   `<same-base>_assets/` folder). Confirm the command printed `wrote ...` and the
+   `.pdf` exists; if the render errors, report the error rather than claiming a
+   PDF was produced. (Omit `--data`/`--formula` only if the analysis wasn't over
+   a dataset at all.)
 3. Write the transcript to `reports/<same-base>.transcript.md`: the plan, then per
    round the analyst's key outputs, each critique, the verifier's verdicts, and
    your rationale + decision + instructions. (The transcript stays Markdown.)
@@ -131,3 +183,7 @@ The final report always ships as a **PDF**.
   every null result is framed with power, a CI, or a Bayes factor.
 - If the data can't support the question (too little data, wrong shape), say so
   plainly rather than manufacturing a conclusion.
+- A "Recommended Next Experiments" claim must trace to `predict`/`vif`/
+  `design-coverage`/`doe-optimum` output, same as any other number in the report
+  — never freehand a DoE recommendation, and never freehand the figures/tables
+  that back it either.

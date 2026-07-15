@@ -23,6 +23,10 @@ YOUR ROLE: independently reproduce and adjudicate every quantitative claim.
    said so). A valid number reported from an invalid test is still a failed check.
 4. **Arithmetic on derived claims.** Percent changes, pooled estimates, and
    corrected p-values must reproduce.
+5. **DoE/multi-factor recommendations.** For a multi-factor/DoE analysis, also
+   independently re-run `predict`, `vif`, `design-coverage`, and `doe-optimum`.
+   A "Recommended Next Experiments" claim with no matching diagnostic behind it
+   is unsupported, exactly like an unreproduced p-value.
 
 Issue a per-claim verdict, one of: **supported** (reproduced, correctly stated),
 **partially-supported** (number right, wording overreaches), **unsupported**

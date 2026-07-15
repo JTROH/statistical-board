@@ -1,16 +1,16 @@
 """The judge-led round loop that drives the six roles of the statistical board.
 
-Each round: the Analyst runs the `run_stat` engine tool (executed locally) to
-gather real numbers; three critics (frequentist / assumptions / bayesian) attack
-the analysis in parallel; the Verifier independently reproduces every statistic;
-and the Judge adjudicates, composes the draft, and decides iterate vs. finalize.
+Structurally identical to the research board's loop, but grounded in computation:
+the Analyst and Verifier are given the `run_stat` engine tool (executed locally),
+and there are three statistical critics (frequentist / assumptions / bayesian)
+where the research board had contrarian / expansionist / principle.
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from anthropic import AsyncAnthropic
 
@@ -38,8 +38,19 @@ _DECISION_SCHEMA: dict[str, Any] = {
         "rationale": {"type": "string"},
         "next_instructions": {"type": "string"},
         "draft": {"type": "string"},
+        # Multi-factor/DoE model context, so the report's appendix can re-fit and
+        # re-render the EXACT model the draft is based on. "" / [] ("not
+        # applicable") when this round's draft is a one-factor group comparison,
+        # not a fitted regression/two-way-ANOVA/ANCOVA model.
+        "model_formula": {"type": "string"},
+        "model_factors": {"type": "array", "items": {"type": "string"}},
+        "model_typ": {"type": "integer", "description": "ANOVA SS type (1|2|3) actually "
+                                                        "used for model_formula; 0 if not applicable. "
+                                                        "MUST match what run_stat was actually called "
+                                                        "with -- Type II and III can disagree."},
     },
-    "required": ["decision", "rationale", "next_instructions", "draft"],
+    "required": ["decision", "rationale", "next_instructions", "draft",
+                "model_formula", "model_factors", "model_typ"],
     "additionalProperties": False,
 }
 
@@ -91,6 +102,7 @@ async def run(
     covariates: list[str] | None = None,
     paired: bool = False,
     alpha: float = 0.05,
+    typ: int = 2,
     max_rounds: int | None = None,
     dry_run: bool = False,
     on_event: Callable[[dict[str, Any]], None] | None = None,
@@ -252,4 +264,12 @@ async def run(
         open_qs = instructions
 
     transcript.final_report = draft
+    if multifactor and dec.get("model_formula"):
+        # The judge states the exact formula/factors backing its OWN draft (it
+        # composed the draft from that fitted model, so this is a "state what
+        # you already know" field, not an inference) -- the appendix re-fits
+        # and re-renders precisely that model, never a re-derived guess.
+        transcript.formula = dec["model_formula"]
+        transcript.factors = dec.get("model_factors") or factors or []
+        transcript.typ = dec.get("model_typ") or typ
     return transcript

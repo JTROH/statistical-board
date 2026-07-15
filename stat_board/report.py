@@ -31,23 +31,32 @@ em { color: #555; }
 h1 em, h1 code { color: #ffc55c; font-style: normal; background: none; }
 code { font-family: monospace; background: #f2f2f2; font-size: 9pt; }
 table { width: 100%; border-collapse: collapse; margin: 6pt 0; font-size: 9pt; }
-th { background: #f0f0f0; text-align: left; padding: 4pt 6pt;
-     border: 1px solid #cccccc; }
+th { font-weight: 700; text-align: left; padding: 4pt 6pt;
+     border: 1px solid #cccccc; border-bottom: 1.5pt solid #0f5e6e; }
 td { padding: 4pt 6pt; border: 1px solid #dddddd; vertical-align: top; }
 li { margin: 2pt 0; }
 """
+# `th` is deliberately background-free (bold text + a teal bottom border instead)
+# rather than styled with a fill colour — see the _BG_FILLS comment below for why.
 
 
-# Background-fill colours used by the stylesheet (H1 teal, H2 light-teal, th/code
-# grays). PyMuPDF's Story re-draws these fills onto continuation pages where the
-# element does not actually belong — heading bands bleed into the top margin, and
-# table-header fills bleed mid-page behind the figures. Both are removed below.
-_BG_FILLS = [(0.06, 0.37, 0.43), (0.80, 0.93, 0.94), (0.94, 0.94, 0.94), (0.95, 0.95, 0.95)]
+# Background-fill colours used by the stylesheet (H1 teal, H2 light-teal, code
+# gray). PyMuPDF's Story re-draws these fills onto continuation pages where the
+# element does not actually belong — heading bands bleed into the top margin. A
+# `th` background used to be in this list too: on a table long enough to span
+# many pages (e.g. a DoE report's ranked-combinations appendix), Story leaves
+# dozens of ghost copies of that fill scattered down *every* page, not just
+# near the top — and because they land on top of unrelated later table rows,
+# the "no text under it" phantom check below doesn't catch them (there IS
+# text there, just not the text that fill belongs to). Removing the fill at
+# the source is simpler and more robust than trying to out-guess Story's
+# layout internals with a better heuristic.
+_BG_FILLS = [(0.06, 0.37, 0.43), (0.80, 0.93, 0.94), (0.95, 0.95, 0.95)]
 
 
 def _is_bg_fill(f) -> bool:
     return f is not None and any(
-        all(abs(a - b) < 0.04 for a, b in zip(f, c)) for c in _BG_FILLS)
+        all(abs(a - b) < 0.04 for a, b in zip(f, c, strict=False)) for c in _BG_FILLS)
 
 
 def _strip_top_bleed(doc) -> None:
@@ -135,10 +144,15 @@ def markdown_to_pdf(md_text: str, out_path: str | Path, *, title: str | None = N
 
 def convert_file(in_path: str | Path, out_path: str | Path | None = None, *,
                  data_path: str | None = None, group_col: str | None = None,
-                 value_col: str | None = None, alpha: float = 0.05) -> Path:
+                 value_col: str | None = None, alpha: float = 0.05,
+                 formula: str | None = None, factors: list[str] | None = None,
+                 typ: int = 2) -> Path:
     """Render a Markdown report to PDF. If ``data_path`` is given, a deterministic
     appendix (figures + detailed statistics tables) computed from that dataset is
-    generated and appended before rendering."""
+    generated and appended before rendering. Pass ``formula`` for a multi-factor/
+    DoE analysis (regression/two-way-ANOVA/ANCOVA all reduce to one fitted patsy
+    formula) instead of ``group_col``/``value_col`` — the two paths are mutually
+    exclusive; ``formula`` takes precedence when both are given."""
     in_path = Path(in_path)
     if out_path is None:
         out_path = in_path.with_suffix(".pdf")
@@ -146,7 +160,15 @@ def convert_file(in_path: str | Path, out_path: str | Path | None = None, *,
     md_text = in_path.read_text()
     image_root: Path | None = None
 
-    if data_path:
+    if formula and data_path:
+        from . import appendix  # local import: keeps matplotlib off the fast path
+        built = appendix.build_multifactor(
+            data_path, formula, factors=factors, typ=typ, alpha=alpha,
+            assets_dir=out_path.parent / f"{out_path.stem}_assets")
+        if built is not None:
+            appendix_md, image_root = built
+            md_text = md_text.rstrip() + "\n" + appendix_md
+    elif data_path:
         from . import appendix  # local import: keeps matplotlib off the fast path
         built = appendix.build(data_path, group_col=group_col, value_col=value_col,
                                alpha=alpha, assets_dir=out_path.parent / f"{out_path.stem}_assets")
@@ -170,11 +192,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data", help="Dataset to build the figures/tables appendix from.")
     parser.add_argument("--group-col", help="Long-format: group-label column.")
     parser.add_argument("--value-col", help="Long-format: value column.")
+    parser.add_argument("--formula", help="Multi-factor/DoE analysis: the fitted patsy formula "
+                                          "(regression/two-way-ANOVA/ANCOVA all reduce to one). "
+                                          "Requires --data. Takes precedence over --group-col/"
+                                          "--value-col.")
+    parser.add_argument("--factor", action="append", dest="factors",
+                       help="Multi-factor/DoE: a factor column (repeat for each). Enables the "
+                            "design-coverage/curvature/optimum-ranking appendix sections.")
+    parser.add_argument("--type", type=int, choices=[1, 2, 3], default=2, dest="typ",
+                       help="--formula: ANOVA SS type (default 2).")
     parser.add_argument("--alpha", type=float, default=0.05)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
+    if args.formula and not args.data:
+        parser.error("--formula requires --data")
+
     out = convert_file(args.input, args.output, data_path=args.data,
-                       group_col=args.group_col, value_col=args.value_col, alpha=args.alpha)
+                       group_col=args.group_col, value_col=args.value_col, alpha=args.alpha,
+                       formula=args.formula, factors=args.factors, typ=args.typ)
     print(f"wrote {out}")
     return 0
 

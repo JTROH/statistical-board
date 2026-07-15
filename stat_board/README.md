@@ -56,6 +56,14 @@ python3 -m stat_board.engine <command> --data <file.csv|.json> [options]
 | **`regression --formula "y ~ x1 + x2 + C(g)"`** | OLS + ANOVA term table + residual diagnostics |
 | **`poisson --formula "n ~ year" [--exposure col]`** | Poisson rate regression (IRR) + overdispersion check |
 | **`negbin --formula "n ~ year"`** | Negative-binomial rate regression for overdispersed counts |
+| **`predict --formula "..."`** | Per-row predicted/residual/leverage/Cook's D — flags influential runs |
+| **`vif --formula "..."`** | Variance inflation factor per term — flags collinearity/confounding |
+| **`design-coverage --factor F1 --factor F2 [--value COL]`** | Tested vs. possible factor-level combinations, replicate counts, curvature check |
+| **`doe-optimum --formula "..." --factor F1 --factor F2 --value COL`** | Ranks every *actually tested* combination by predicted response; flags boundary vs. interior optima |
+
+The four DoE diagnostics above are the grounding for a report's **Recommended
+Next Experiments** section — a multi-factor/DoE analysis is never allowed to
+suggest a follow-up run without one of them backing it.
 
 Data shapes: for one-factor comparisons — **wide** CSV (one column per group),
 **long** CSV (`--group-col`/`--value-col`), or **JSON** `{"A": [...], "B": [...]}`.
@@ -84,6 +92,18 @@ from the data, not written by the model:
 ```bash
 python3 -m stat_board.report reports/<slug>.md \
     --data sample_data/long.csv --group-col group --value-col value
+```
+
+For a multi-factor/DoE analysis, pass `--formula`/`--factor` instead of
+`--group-col`/`--value-col` — this renders predicted-vs-observed, Pareto-of-
+effects, and (for exactly 2 continuous factors) a contour plot, plus an
+Appendix C of design diagnostics (leverage/Cook's D, VIF, design coverage,
+curvature, ranked-optimum table):
+
+```bash
+python3 -m stat_board.report reports/<slug>.md \
+    --data sample_data/multifactor.csv --formula "score ~ C(treatment) * C(sex)" \
+    --factor treatment --factor sex
 ```
 
 ## Standalone (no Claude Code)

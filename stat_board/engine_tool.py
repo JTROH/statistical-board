@@ -8,7 +8,8 @@ the model only has to name a command and its parameters — never the data.
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .engine import analyses
 from .engine.data import DataError, load_groups
@@ -20,7 +21,8 @@ _GROUP_COMMANDS = {
 }
 # Commands that run on the whole table by column name (multi-factor / standalone).
 _STANDALONE = {"regression", "two-way-anova", "ancova", "poisson", "negbin",
-               "chisquare", "power", "correct"}
+               "chisquare", "power", "correct",
+               "predict", "vif", "design-coverage", "doe-optimum"}
 
 TOOL_NAME = "run_stat"
 
@@ -40,7 +42,17 @@ def build_tool() -> dict[str, Any]:
             "(factor(s) + numeric covariate(s)), and regression (a patsy formula). "
             "For COUNT/frequency data (events per period), poisson and negbin are "
             "rate regressions (report incidence-rate ratios). chisquare/power/correct "
-            "carry their data in the parameters."
+            "carry their data in the parameters. For a MULTI-FACTOR/DoE analysis, also "
+            "run: predict (per-row predicted/residual/leverage/Cook's D — flags which "
+            "runs are influential enough to warrant a confirmation rerun), vif "
+            "(variance inflation factor per term — flags confounding/multicollinearity), "
+            "design-coverage (how many of the factors' possible level combinations were "
+            "actually run, replicate counts, and a curvature contrast if center-point "
+            "runs are present), and doe-optimum (ranks every ACTUALLY TESTED factor "
+            "combination by predicted response, and flags whether the best setting sits "
+            "at a factor's tested boundary — a real optimum may lie beyond the tested "
+            "range). These four are the grounding for any 'recommended next experiment' "
+            "claim — never recommend a follow-up experiment without one of them."
         ),
         "input_schema": {
             "type": "object",
@@ -58,10 +70,14 @@ def build_tool() -> dict[str, Any]:
                 "high": {"type": "number", "description": "tost: absolute upper equivalence bound."},
                 "method": {"type": "string", "description": "correlation: pearson|spearman|kendall. correct: fdr_bh|bonferroni|holm."},
                 "r": {"type": "number", "description": "bayes-ttest: Cauchy prior scale (default 0.707)."},
-                "formula": {"type": "string", "description": "regression: patsy formula, e.g. 'y ~ x1 + x2 + C(g)'."},
-                "value": {"type": "string", "description": "two-way-anova/ancova: numeric outcome column."},
+                "formula": {"type": "string", "description": "regression/predict/vif/doe-optimum: "
+                                                            "patsy formula, e.g. 'y ~ x1 + x2 + C(g)'."},
+                "value": {"type": "string", "description": "two-way-anova/ancova/design-coverage/"
+                                                           "doe-optimum: numeric outcome column."},
                 "factors": {"type": "array", "items": {"type": "string"},
-                            "description": "two-way-anova/ancova: categorical factor columns."},
+                            "description": "two-way-anova/ancova/design-coverage/doe-optimum: "
+                                          "factor columns (categorical for two-way-anova/ancova; "
+                                          "the DoE factor columns for design-coverage/doe-optimum)."},
                 "covariates": {"type": "array", "items": {"type": "string"},
                                "description": "ancova: numeric covariate columns."},
                 "typ": {"type": "integer", "description": "regression/two-way-anova/ancova: ANOVA SS type 1|2|3 (default 2)."},
@@ -147,6 +163,14 @@ def make_executor(
                     k_groups=inp.get("k_groups"))
             elif cmd == "correct":
                 res = analyses.correct_pvalues(inp["pvalues"], method=inp.get("method", "fdr_bh"), alpha=a)
+            elif cmd == "predict":
+                res = analyses.predict_table(data_path, inp["formula"], alpha=a)
+            elif cmd == "vif":
+                res = analyses.vif_table(data_path, inp["formula"])
+            elif cmd == "design-coverage":
+                res = analyses.design_coverage(data_path, inp["factors"], value=inp.get("value"))
+            elif cmd == "doe-optimum":
+                res = analyses.doe_optimum(data_path, inp["formula"], inp["factors"], inp["value"])
             else:
                 return json.dumps({"error": "unknown_command", "command": cmd})
         except (DataError, ValueError, KeyError, TypeError) as exc:

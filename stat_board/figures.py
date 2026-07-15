@@ -11,6 +11,7 @@ import io
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")  # no display needed
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
@@ -141,3 +142,126 @@ def generate_all(groups, assets_dir: Path) -> list[dict[str, str]]:
         figs.append(residual_qq(groups, assets_dir))
         figs.append(residuals_vs_fitted(groups, assets_dir))
     return figs
+
+
+# --------------------------------------------------------------------------- #
+# Multi-factor / DoE model figures — general fitted-model diagnostics, not tied
+# to the one-way `groups` shape above. `predicted`/`observed`/`resid`/`fitted`
+# come from `stat_board.engine.analyses.predict_table`; `terms` comes from the
+# `anova` list already returned by `regression`/`two_way_anova`/`ancova`.
+# --------------------------------------------------------------------------- #
+
+def predicted_vs_observed(rows: list[dict], assets_dir: Path) -> dict[str, str]:
+    observed = np.array([r["observed"] for r in rows], float)
+    predicted = np.array([r["predicted"] for r in rows], float)
+    fig, ax = plt.subplots(figsize=(5.6, 3.2))
+    lo, hi = min(observed.min(), predicted.min()), max(observed.max(), predicted.max())
+    pad = (hi - lo) * 0.05 or 1.0
+    ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="#999999", linewidth=1, linestyle="--")
+    ax.scatter(observed, predicted, s=16, color=TEAL, alpha=0.7, edgecolors="none")
+    ax.set_xlabel("Observed"); ax.set_ylabel("Predicted")
+    ax.set_title("Predicted vs. observed")
+    _style(ax); fig.tight_layout()
+    path = assets_dir / "fig_pred_obs.png"; _save(fig, path)
+    return {"file": path.name,
+            "caption": "Figure. Predicted vs. observed; points on the dashed line indicate a perfect fit."}
+
+
+def pareto_effects(terms: list[dict], assets_dir: Path) -> dict[str, str]:
+    """Bar chart of each model term's partial eta^2, sorted largest first — the
+    classic DoE 'Pareto of effects' view of which terms move the response most."""
+    ordered = sorted(terms, key=lambda t: t.get("partial_eta_sq") or 0, reverse=True)
+    names = [t["term"] for t in ordered]
+    magnitudes = [t.get("partial_eta_sq") or 0 for t in ordered]
+    colors = [ACCENT if t.get("significant") else TEAL_LIGHT for t in ordered]
+    fig, ax = plt.subplots(figsize=(5.6, 3.2))
+    y = np.arange(len(names))
+    ax.barh(y, magnitudes, color=colors, edgecolor=TEAL_DARK)
+    ax.set_yticks(y); ax.set_yticklabels(names); ax.invert_yaxis()
+    ax.set_xlabel("Partial eta^2"); ax.set_title("Pareto of model term effects")
+    _style(ax); fig.tight_layout()
+    path = assets_dir / "fig_pareto.png"; _save(fig, path)
+    return {"file": path.name,
+            "caption": "Figure. Model terms ranked by effect size (partial eta^2); "
+                      "solid bars are significant at the report's alpha."}
+
+
+def regression_qq(resid: np.ndarray, assets_dir: Path) -> dict[str, str]:
+    fig, ax = plt.subplots(figsize=(5.6, 3.2))
+    (osm, osr), (slope, intercept, _) = stats.probplot(resid, dist="norm")
+    ax.scatter(osm, osr, s=16, color=TEAL, alpha=0.7, edgecolors="none")
+    ax.plot(osm, slope * osm + intercept, color=ACCENT, linewidth=1.5)
+    ax.set_xlabel("Theoretical quantiles"); ax.set_ylabel("Ordered residuals")
+    ax.set_title("Normal Q-Q plot of residuals")
+    _style(ax); fig.tight_layout()
+    path = assets_dir / "fig_qq.png"; _save(fig, path)
+    return {"file": path.name,
+            "caption": "Figure. Normal Q-Q plot of model residuals; points on the line "
+                      "support the normality assumption."}
+
+
+def regression_resid_vs_fitted(resid: np.ndarray, fitted: np.ndarray, assets_dir: Path) -> dict[str, str]:
+    fig, ax = plt.subplots(figsize=(5.6, 3.2))
+    ax.axhline(0, color="#999999", linewidth=1, linestyle="--")
+    ax.scatter(fitted, resid, s=16, color=TEAL, alpha=0.6, edgecolors="none")
+    ax.set_xlabel("Fitted value"); ax.set_ylabel("Residual")
+    ax.set_title("Residuals vs. fitted")
+    _style(ax); fig.tight_layout()
+    path = assets_dir / "fig_resid.png"; _save(fig, path)
+    return {"file": path.name,
+            "caption": "Figure. Residuals vs. fitted values; even vertical spread with no "
+                      "trend supports the equal-variance assumption."}
+
+
+def contour(path, formula: str, factor_x: str, factor_y: str, assets_dir: Path,
+           n_grid: int = 40) -> dict[str, str]:
+    """Filled contour of predicted response over factor_x/factor_y's tested
+    range, with every other model term held at its mean (numeric) or mode
+    (categorical) — the classic DoE response-surface visual. Caller is
+    responsible for confirming factor_x/factor_y are the only two continuous
+    factors before calling this (see `appendix.build_multifactor`)."""
+    import pandas as pd
+    import statsmodels.formula.api as smf
+
+    from .engine.data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+
+    ref = {}
+    for c in df.columns:
+        if c in (factor_x, factor_y):
+            continue
+        ref[c] = df[c].mean() if pd.api.types.is_numeric_dtype(df[c]) else df[c].mode().iloc[0]
+
+    xs = np.linspace(df[factor_x].min(), df[factor_x].max(), n_grid)
+    ys = np.linspace(df[factor_y].min(), df[factor_y].max(), n_grid)
+    grid = pd.DataFrame([{**ref, factor_x: x, factor_y: y} for y in ys for x in xs])
+    z = model.predict(grid).to_numpy().reshape(len(ys), len(xs))
+
+    fig, ax = plt.subplots(figsize=(5.6, 4.2))
+    cs = ax.contourf(xs, ys, z, levels=14, cmap="viridis")
+    ax.scatter(df[factor_x], df[factor_y], s=14, color="white", edgecolors=TEAL_DARK, zorder=3)
+    fig.colorbar(cs, ax=ax, label="Predicted response")
+    ax.set_xlabel(factor_x); ax.set_ylabel(factor_y)
+    ax.set_title(f"Predicted response over {factor_x} x {factor_y}")
+    ax.tick_params(colors="#333333", labelsize=8)
+    fig.tight_layout()
+    path_out = assets_dir / "fig_contour.png"; _save(fig, path_out)
+    return {"file": path_out.name,
+            "caption": f"Figure. Predicted response surface over {factor_x} and {factor_y} "
+                      f"(other model terms held at their mean/mode); white points are actual runs."}
+
+
+def generate_all_multifactor(rows: list[dict], terms: list[dict], resid: np.ndarray,
+                             fitted: np.ndarray, assets_dir: Path) -> list[dict[str, str]]:
+    """Standard multi-factor/DoE figure set (contour is added separately by
+    the caller when exactly 2 continuous factors are present — see
+    `appendix.build_multifactor`)."""
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    return [
+        predicted_vs_observed(rows, assets_dir),
+        regression_resid_vs_fitted(resid, fitted, assets_dir),
+        regression_qq(resid, assets_dir),
+        pareto_effects(terms, assets_dir),
+    ]

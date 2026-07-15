@@ -15,11 +15,12 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from scipy import stats
-from statsmodels.stats.weightstats import ttost_ind as _sm_tost
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.multitest import multipletests
 from statsmodels.stats.power import FTestAnovaPower, TTestIndPower
+from statsmodels.stats.weightstats import ttost_ind as _sm_tost
 
 from . import bayes, effects
 from .data import Groups, require_two
@@ -447,13 +448,24 @@ def regression(path: str, formula: str, *, typ: int = 2, alpha: float = 0.05) ->
     return out
 
 
+def formula_for(value: str, factors: list[str], covariates: list[str] | None = None) -> str:
+    """Build a patsy formula for a multi-factor design: with no covariates, the
+    factors are joined with '*' (all interactions, what `two_way_anova` needs);
+    with covariates, factors and covariates are joined additively with '+'
+    (main-effects ANCOVA style, what `ancova` needs)."""
+    factor_terms = [f"C({_safe(f)})" for f in factors]
+    rhs = " + ".join(factor_terms + [_safe(c) for c in covariates]) if covariates \
+        else " * ".join(factor_terms)
+    return f"{_safe(value)} ~ {rhs}"
+
+
 def two_way_anova(path: str, *, value: str, factors: list[str], typ: int = 2,
                   alpha: float = 0.05) -> dict[str, Any]:
     """Factorial ANOVA: main effects + all interactions of 2+ categorical factors
     (e.g. score ~ treatment * sex). Reports per-term F, p, and partial eta²."""
     if len(factors) < 2:
         raise ValueError("two-way/factorial ANOVA needs at least 2 factors")
-    formula = f"{_safe(value)} ~ " + " * ".join(f"C({_safe(f)})" for f in factors)
+    formula = formula_for(value, factors)
     out = _fit_and_anova(path, formula, typ=typ, alpha=alpha)
     out["analysis"] = "two_way_anova"
     out["value"], out["factors"] = value, factors
@@ -469,8 +481,7 @@ def ancova(path: str, *, value: str, factors: list[str], covariates: list[str],
     (e.g. score ~ C(treatment) + age)."""
     if not factors or not covariates:
         raise ValueError("ANCOVA needs at least one factor and one covariate")
-    rhs = [f"C({_safe(f)})" for f in factors] + [_safe(c) for c in covariates]
-    formula = f"{_safe(value)} ~ " + " + ".join(rhs)
+    formula = formula_for(value, factors, covariates)
     out = _fit_and_anova(path, formula, typ=typ, alpha=alpha)
     out["analysis"] = "ancova"
     out["value"], out["factors"], out["covariates"] = value, factors, covariates
@@ -478,6 +489,204 @@ def ancova(path: str, *, value: str, factors: list[str], covariates: list[str],
     out["conclusion"] = (f"Adjusting for {', '.join(covariates)} (alpha={alpha:g}), "
                          f"significant effects: {', '.join(sig) if sig else 'none'}.")
     return out
+
+
+def predict_table(path: str, formula: str, *, alpha: float = 0.05) -> dict[str, Any]:
+    """Per-row observed/predicted/residual/leverage/Cook's distance for a fitted
+    OLS model — the basis for a predicted-vs-observed figure and for flagging
+    which specific runs are influential enough to warrant a confirmation rerun.
+    Thresholds are the conventional ones: leverage > 2p/n, Cook's D > 4/n."""
+    import statsmodels.formula.api as smf
+    from statsmodels.stats.outliers_influence import OLSInfluence
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    infl = OLSInfluence(model)
+    n, p = int(model.nobs), int(len(model.params))
+    leverage_cut, cooks_cut = 2 * p / n, 4 / n
+
+    endog = np.asarray(model.model.endog, float)
+    fitted = np.asarray(model.fittedvalues, float)
+    resid = np.asarray(model.resid, float)
+    leverage = np.asarray(infl.hat_matrix_diag, float)
+    cooks_d = np.asarray(infl.cooks_distance[0], float)
+    stud_resid = np.asarray(infl.resid_studentized_internal, float)
+    orig = model.model.data.frame
+
+    rows = []
+    for i in range(n):
+        high_leverage = bool(leverage[i] > leverage_cut)
+        influential = bool(cooks_d[i] > cooks_cut)
+        rows.append({
+            "row": int(i), "data": {k: (v.item() if hasattr(v, "item") else v)
+                                    for k, v in orig.iloc[i].to_dict().items()},
+            "observed": float(endog[i]), "predicted": float(fitted[i]),
+            "residual": float(resid[i]), "standardized_residual": float(stud_resid[i]),
+            "leverage": float(leverage[i]), "cooks_d": float(cooks_d[i]),
+            "high_leverage": high_leverage, "influential": influential,
+        })
+    flagged = [r["row"] for r in rows if r["influential"] or r["high_leverage"]]
+    return {
+        "analysis": "predict_table", "formula": formula, "n": n, "alpha": alpha,
+        "leverage_threshold": float(leverage_cut), "cooks_d_threshold": float(cooks_cut),
+        "rows": rows, "flagged_rows": flagged, "n_flagged": len(flagged),
+    }
+
+
+def vif_table(path: str, formula: str) -> dict[str, Any]:
+    """Variance Inflation Factor per model term — flags multicollinearity /
+    confounding between predictors. VIF > 5 is a common concern threshold."""
+    import statsmodels.formula.api as smf
+    from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    exog = model.model.exog
+    terms = []
+    for i, name in enumerate(model.model.exog_names):
+        if name == "Intercept":
+            continue
+        vif = float(variance_inflation_factor(exog, i))
+        terms.append({"term": name, "vif": vif, "collinearity_concern": bool(vif > 5)})
+    return {"analysis": "vif", "formula": formula, "terms": terms}
+
+
+def design_coverage(path: str, factors: list[str], *, value: str | None = None) -> dict[str, Any]:
+    """Design-level diagnostics for a multi-factor/DoE dataset: how many of the
+    factors' possible level combinations were actually run, replicate counts per
+    combination tested, and — when center-point runs are present alongside corner
+    runs — a curvature contrast (do center points sit off the corners' trend?)."""
+    import itertools
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    levels = {f: sorted(df[f].dropna().unique().tolist()) for f in factors}
+    numeric = {f: bool(pd.api.types.is_numeric_dtype(df[f])) for f in factors}
+
+    n_possible = 1
+    for f in factors:
+        n_possible *= max(len(levels[f]), 1)
+
+    keys = df[factors].astype(str).agg("|".join, axis=1)
+    counts = keys.value_counts()
+    replicate_counts = {k: int(v) for k, v in counts.items()}
+    tested = set(counts.index)
+
+    missing: list[dict[str, Any]] = []
+    full_grid_enumerated = n_possible <= 64
+    if full_grid_enumerated:
+        for combo in itertools.product(*(levels[f] for f in factors)):
+            key = "|".join(str(v) for v in combo)
+            if key not in tested:
+                missing.append(dict(zip(factors, combo, strict=True)))
+
+    # A "center point" only makes sense for continuous factors with a real
+    # min/max range, and only if every OTHER (non-continuous) factor is constant.
+    rangey = [f for f in factors if numeric[f] and len(levels[f]) >= 2]
+    has_varying_categorical = any(not numeric[f] and len(levels[f]) > 1 for f in factors)
+    center_mask = pd.Series(False, index=df.index)
+    curvature = None
+    if rangey and not has_varying_categorical:
+        mask = pd.Series(True, index=df.index)
+        for f in rangey:
+            lo, hi = levels[f][0], levels[f][-1]
+            mid = (lo + hi) / 2
+            tol = max((hi - lo) * 0.05, 1e-9)
+            mask &= (df[f] - mid).abs() <= tol
+        center_mask = mask
+
+        n_center = int(center_mask.sum())
+        if value and 0 < n_center < len(df):
+            corner_vals = df.loc[~center_mask, value].astype(float)
+            center_vals = df.loc[center_mask, value].astype(float)
+            result: dict[str, Any] = {
+                "corner_mean": float(corner_vals.mean()),
+                "center_mean": float(center_vals.mean()),
+                "difference": float(corner_vals.mean() - center_vals.mean()),
+            }
+            if len(center_vals) >= 2 and len(corner_vals) >= 2:
+                t, p = stats.ttest_ind(corner_vals, center_vals, equal_var=False)
+                result.update(t=float(t), p=float(p))
+            else:
+                result.update(t=None, p=None)
+            result["center_point_df"] = int(max(len(center_vals) - 1, 0))
+            result["low_power_warning"] = result["center_point_df"] < 3
+            curvature = result
+
+    return {
+        "analysis": "design_coverage", "factors": factors, "levels": levels,
+        "n_possible_combinations": int(n_possible),
+        "n_tested_combinations": int(len(tested)),
+        "coverage_fraction": float(len(tested) / n_possible) if n_possible else float("nan"),
+        "replicate_counts": replicate_counts,
+        "missing_combinations": missing, "n_missing_shown": len(missing),
+        "full_grid_enumerated": full_grid_enumerated,
+        "n_center_points": int(center_mask.sum()),
+        "curvature": curvature,
+    }
+
+
+def doe_optimum(path: str, formula: str, factors: list[str], value: str) -> dict[str, Any]:
+    """Rank every ACTUALLY TESTED combination of the given factors' observed
+    levels by the fitted model's predicted response (generalizes "which of the
+    N tested corners is best" — never extrapolates to an untested/interior
+    point). Flags, per factor, whether the best setting sits at that factor's
+    tested min/max ("boundary" — a real optimum may lie beyond the tested
+    range) or strictly inside it ("interior")."""
+    import itertools
+
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    levels = {f: sorted(df[f].dropna().unique().tolist()) for f in factors}
+
+    # Reference value for any model term not among `factors` (e.g. a covariate),
+    # held at its mean (numeric) or mode (categorical), so predict() has every
+    # column the formula needs.
+    ref = {}
+    for c in df.columns:
+        if c in factors:
+            continue
+        ref[c] = df[c].mean() if pd.api.types.is_numeric_dtype(df[c]) else df[c].mode().iloc[0]
+
+    observed_key = df[factors].astype(str).agg("|".join, axis=1)
+    rows = []
+    for combo in itertools.product(*(levels[f] for f in factors)):
+        point = dict(zip(factors, combo, strict=True))
+        predicted = float(model.predict(pd.DataFrame([{**ref, **point}])).iloc[0])
+        key = "|".join(str(v) for v in combo)
+        mask = observed_key == key
+        tested = bool(mask.any())
+        entry: dict[str, Any] = {**point, "predicted": predicted, "tested": tested}
+        if tested:
+            entry["observed_mean"] = float(df.loc[mask, value].astype(float).mean())
+        rows.append(entry)
+    rows.sort(key=lambda r: r["predicted"], reverse=True)
+
+    best = rows[0] if rows else None
+    boundary_flags: dict[str, str] = {}
+    if best:
+        for f in factors:
+            lv = levels[f]
+            if pd.api.types.is_numeric_dtype(df[f]) and len(lv) > 1:
+                boundary_flags[f] = "boundary" if best[f] in (lv[0], lv[-1]) else "interior"
+            else:
+                boundary_flags[f] = "categorical"
+
+    return {
+        "analysis": "doe_optimum", "formula": formula, "factors": factors,
+        "rows": rows, "best": best, "boundary_flags": boundary_flags,
+        "note": "Predictions are evaluated only at each factor's ACTUALLY TESTED "
+                "levels -- this never claims an interior/untested optimum.",
+    }
 
 
 def _count_coefs(model, alpha: float, skip: tuple[str, ...] = ()) -> dict[str, Any]:

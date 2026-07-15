@@ -98,6 +98,26 @@ def build_parser() -> argparse.ArgumentParser:
                     help="fdr_bh, bonferroni, holm, ... (statsmodels names)")
     mc.add_argument("--alpha", type=float, default=0.05)
 
+    pt = sub.add_parser("predict", help="per-row predicted/residual/leverage/Cook's D for a fitted model")
+    pt.add_argument("--data", required=True)
+    pt.add_argument("--formula", required=True)
+    pt.add_argument("--alpha", type=float, default=0.05)
+
+    vi = sub.add_parser("vif", help="variance inflation factor per model term (multicollinearity)")
+    vi.add_argument("--data", required=True)
+    vi.add_argument("--formula", required=True)
+
+    dcov = sub.add_parser("design-coverage", help="DoE design coverage, replicates, and curvature check")
+    dcov.add_argument("--data", required=True)
+    dcov.add_argument("--factor", action="append", required=True, dest="factors")
+    dcov.add_argument("--value", help="numeric outcome column (enables the curvature contrast)")
+
+    opt = sub.add_parser("doe-optimum", help="rank actually-tested factor combinations by predicted response")
+    opt.add_argument("--data", required=True)
+    opt.add_argument("--formula", required=True)
+    opt.add_argument("--factor", action="append", required=True, dest="factors")
+    opt.add_argument("--value", required=True, help="numeric outcome column")
+
     return parser
 
 
@@ -158,6 +178,14 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         )
     if cmd == "correct":
         return analyses.correct_pvalues(json.loads(args.pvalues), method=args.method, alpha=args.alpha)
+    if cmd == "predict":
+        return analyses.predict_table(args.data, args.formula, alpha=args.alpha)
+    if cmd == "vif":
+        return analyses.vif_table(args.data, args.formula)
+    if cmd == "design-coverage":
+        return analyses.design_coverage(args.data, args.factors, value=args.value)
+    if cmd == "doe-optimum":
+        return analyses.doe_optimum(args.data, args.formula, args.factors, args.value)
     raise ValueError(f"unknown command: {cmd}")
 
 

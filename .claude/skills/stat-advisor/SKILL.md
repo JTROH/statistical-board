@@ -60,6 +60,25 @@ Multi-factor (whole table, by column name):
 `two-way-anova --value COL --factor F1 --factor F2` · `ancova --value COL --factor F --covariate C` ·
 `regression --formula "y ~ x1 + x2 + C(g)"`
 
+DoE/multi-factor diagnostics (also whole-table, by column name — useful once a
+regression/two-way-anova/ancova model is fit, especially for a Design-of-
+Experiments dataset):
+- `predict --formula "..."` — for each run, how far off the model's prediction
+  was, and whether that run is unusually influential (**leverage**/**Cook's
+  distance**: how much the fitted model would change if that one run were
+  removed) and so worth a confirmation rerun.
+- `vif --formula "..."` — **variance inflation factor** per term: are two
+  predictors so correlated with each other that the model can't cleanly tell
+  their effects apart (multicollinearity/confounding)?
+- `design-coverage --factor F1 --factor F2 [--value COL]` — how many of the
+  factors' possible level combinations were actually run, replicate counts, and
+  (with `--value`) whether center-point runs (if any) show **curvature** — a
+  bend the tested corners alone can't reveal.
+- `doe-optimum --formula "..." --factor F1 --factor F2 --value COL` — ranks
+  every combination *actually tested* by predicted response (never guesses at
+  an untested point), and flags when the best setting sits at the edge of what
+  was tested — a hint the true optimum may lie beyond the current range.
+
 Data shapes: for one-factor group comparisons — wide CSV (one column per group),
 long CSV (add `--group-col`/`--value-col`), or JSON `{"A":[...],"B":[...]}`. For
 multi-factor, a tidy CSV with one column per variable (outcome, factors, covariates).

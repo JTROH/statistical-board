@@ -47,6 +47,24 @@ commands above do NOT apply then):
 - `power --test ttest|anova --effect-size D (--n N | --power P)` — solve for the omitted one.
 - `correct --pvalues "[..]" --method fdr_bh|bonferroni|holm` — multiple-comparison correction.
 
+DoE/multi-factor diagnostics (run these for EVERY multi-factor/DoE analysis —
+they are the ONLY grounds for a "recommended next experiment" claim; never
+suggest a follow-up run without one of them backing it, and never hand-roll a
+one-off script for what these already compute deterministically):
+- `predict --formula "..."` — per-row observed/predicted/residual/leverage/Cook's
+  D; flags which specific runs are influential enough to warrant a confirmation
+  rerun.
+- `vif --formula "..."` — variance inflation factor per term; flags
+  collinearity/confounding between predictors.
+- `design-coverage --factor F1 --factor F2 [--value COL]` — how many of the
+  factors' possible level combinations were actually run, replicate counts, and
+  (with `--value`) a curvature contrast if center-point runs are present.
+- `doe-optimum --formula "..." --factor F1 --factor F2 --value COL` — ranks
+  every ACTUALLY TESTED factor combination by predicted response (never
+  extrapolates to an untested/interior point), and flags whether the best
+  setting sits at a factor's tested boundary (a real optimum may lie beyond the
+  tested range).
+
 ## Your job each round
 
 1. Read the judge's instructions and the data description you were given.
@@ -59,7 +77,8 @@ commands above do NOT apply then):
    Bayesian critic has a Bayes factor to reason about. If the design is
    MULTI-FACTOR (two+ factors, or a factor plus a covariate), use
    `two-way-anova` / `ancova` / `regression` instead of the one-factor group
-   commands, and report every term's F, p, and partial eta².
+   commands, report every term's F, p, and partial eta², and ALSO run the four
+   DoE diagnostics above (`predict`, `vif`, `design-coverage`, `doe-optimum`).
 4. Paste the exact JSON blocks you got, each under a heading naming the command
    you ran (including the flags). Do not round, reword, or "clean up" numbers.
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,7 @@ class RoundRecord:
 class Transcript:
     question: str
     model: str
-    started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    started_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     hypothesis: str = ""
     key_questions: list[str] = field(default_factory=list)
     rounds: list[RoundRecord] = field(default_factory=list)
@@ -42,6 +42,12 @@ class Transcript:
     group_col: str | None = None
     value_col: str | None = None
     alpha: float = 0.05
+    # Multi-factor/DoE model context (set only when the analysis fit one — see
+    # orchestrator.py's `_DECISION_SCHEMA`); "" / [] means "not applicable, use
+    # the one-way group appendix instead."
+    formula: str = ""
+    factors: list[str] = field(default_factory=list)
+    typ: int = 2
 
 
 def _slug(text: str) -> str:
@@ -54,7 +60,7 @@ def save(transcript: Transcript, out_dir: str | Path) -> dict[str, Path]:
     Returns {'pdf', 'md', 'json'} paths."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     base = f"{_slug(transcript.question)}-{stamp}"
 
     md_path = out / f"{base}.md"
@@ -65,7 +71,9 @@ def save(transcript: Transcript, out_dir: str | Path) -> dict[str, Path]:
         md_path, pdf_path,
         data_path=transcript.data_path or None,
         group_col=transcript.group_col, value_col=transcript.value_col,
-        alpha=transcript.alpha)
+        alpha=transcript.alpha,
+        formula=transcript.formula or None, factors=transcript.factors or None,
+        typ=transcript.typ)
 
     json_path = out / f"{base}.transcript.json"
     json_path.write_text(json.dumps(asdict(transcript), indent=2, ensure_ascii=False),

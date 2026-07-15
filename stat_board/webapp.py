@@ -145,7 +145,7 @@ async def columns(data: str) -> dict[str, Any]:
     try:
         df = pd.read_json(p) if p.suffix.lower() == ".json" else pd.read_csv(p, nrows=2000)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, f"could not read table: {exc}")
+        raise HTTPException(400, f"could not read table: {exc}") from exc
     numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     categorical = [c for c in df.columns if c not in numeric]
     return {"columns": list(map(str, df.columns)),

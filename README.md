@@ -76,7 +76,8 @@ python3 -m stat_board.engine welch-anova --data sample_data/wide.csv
 One-factor commands: `describe`, `assumptions`, `ttest`, `mannwhitney`, `anova`,
 `welch-anova`, `kruskal`, `tukey`, `tost`, `bayes-ttest`, `correlation`,
 `chisquare`, `power`, `correct`. **Multi-factor** (whole table, by column name):
-`two-way-anova`, `ancova`, `regression`. **Count/rate** (events per period):
+`two-way-anova`, `ancova`, `regression`, plus the DoE diagnostics `predict`,
+`vif`, `design-coverage`, `doe-optimum`. **Count/rate** (events per period):
 `poisson`, `negbin`. JSON in, JSON out.
 
 ```bash
@@ -84,6 +85,13 @@ One-factor commands: `describe`, `assumptions`, `ttest`, `mannwhitney`, `anova`,
 python3 -m stat_board.engine two-way-anova --data data.csv --value score --factor treatment --factor sex
 python3 -m stat_board.engine ancova       --data data.csv --value score --factor treatment --covariate age
 python3 -m stat_board.engine regression   --data data.csv --formula "score ~ treatment * sex + age"
+
+# DoE diagnostics: per-run leverage/Cook's D, collinearity (VIF), design coverage +
+# curvature, and ranking every ACTUALLY TESTED combination by predicted response
+python3 -m stat_board.engine predict         --data data.csv --formula "score ~ treatment * sex"
+python3 -m stat_board.engine vif             --data data.csv --formula "score ~ treatment * sex"
+python3 -m stat_board.engine design-coverage --data data.csv --factor treatment --factor sex --value score
+python3 -m stat_board.engine doe-optimum     --data data.csv --formula "score ~ treatment * sex" --factor treatment --factor sex --value score
 
 # count/rate: how many events per period? (incidence-rate ratios + overdispersion check)
 python3 -m stat_board.engine poisson --data counts_per_year.csv --formula "n ~ I(year - 1980)"
@@ -132,10 +140,20 @@ dataset it appends a deterministic appendix built entirely from the data:
   (R² / η² / ω² / ε² / Root MSE), residual diagnostics, and scaled pairwise
   effect sizes (Cohen's d, Hedges' g, CIs).
 
+For a multi-factor/DoE analysis, the appendix instead has predicted-vs-observed,
+Pareto-of-effects, and (for exactly 2 continuous factors) a contour plot, plus a
+design-diagnostics appendix (leverage/Cook's D, VIF, design coverage, curvature,
+ranked-optimum table) — the grounding for the report's **Recommended Next
+Experiments** section.
+
 Render any Markdown report yourself:
 ```bash
 python3 -m stat_board.report examples/sample_report.md out.pdf \
     --data sample_data/long.csv --group-col group --value-col value
+
+# multi-factor/DoE variant
+python3 -m stat_board.report reports/doe_report.md out.pdf \
+    --data data.csv --formula "score ~ treatment * sex" --factor treatment --factor sex
 ```
 
 ## Layout
@@ -158,4 +176,4 @@ Environment variables (all optional): `STAT_MODEL` (default `claude-opus-4-8`),
 
 ## License
 
-MIT — see [LICENSE](LICENSE). (Fill in your name in the copyright line.)
+MIT — see [LICENSE](LICENSE).

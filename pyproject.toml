@@ -1,0 +1,21 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+extend-exclude = ["reports", "uploads", "sample_data", "examples", "desktop_gui"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# E702 (multiple statements on one line): this codebase deliberately uses
+# compact `x = sub.add_parser(...); _add_data_args(x)` one-liners for argparse
+# boilerplate (stat_board/engine/cli.py) — an intentional style, not a bug.
+ignore = ["E702"]
+
+[tool.ruff.lint.per-file-ignores]
+# Long single-line prose strings (tool-parameter descriptions, figure
+# captions) read worse wrapped than long.
+"stat_board/engine_tool.py" = ["E501"]
+"stat_board/figures.py" = ["E501"]

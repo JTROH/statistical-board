@@ -10,6 +10,7 @@ these so its claims are grounded in a real computation, not a guess.
 
 from . import analyses, bayes, data, effects
 from .analyses import (
+    ancova,
     anova,
     anova_table,
     bayes_ttest,
@@ -18,7 +19,6 @@ from .analyses import (
     correct_pvalues,
     correlation,
     describe,
-    ancova,
     kruskal,
     mann_whitney,
     negbin_regression,
