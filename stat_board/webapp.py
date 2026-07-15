@@ -54,6 +54,8 @@ class Run:
     changed: asyncio.Event = field(default_factory=asyncio.Event)
     pdf_name: str | None = None
     transcript_name: str | None = None
+    transcript_pdf_name: str | None = None
+    transcript_md_name: str | None = None
 
 
 RUNS: dict[str, Run] = {}
@@ -93,9 +95,13 @@ async def _execute(run: Run) -> None:
         paths = transcript_mod.save(result, REPORTS_DIR)
         run.pdf_name = paths["pdf"].name
         run.transcript_name = paths["json"].name
+        run.transcript_pdf_name = paths["transcript_pdf"].name
+        run.transcript_md_name = paths["transcript_md"].name
         run.status = "done"
         _push(run, {"type": "done", "pdf": paths["pdf"].name,
-                    "md": paths["md"].name, "transcript": paths["json"].name})
+                    "md": paths["md"].name, "transcript": paths["json"].name,
+                    "transcript_pdf": paths["transcript_pdf"].name,
+                    "transcript_md": paths["transcript_md"].name})
     except Exception as exc:
         run.status = "error"
         message = f"{type(exc).__name__}: {exc}"
@@ -192,7 +198,9 @@ async def start_run(req: RunRequest) -> dict[str, str]:
 @app.get("/api/runs")
 async def list_runs() -> list[dict[str, Any]]:
     return [{"id": r.id, "question": r.question, "status": r.status, "dry_run": r.dry_run,
-             "pdf": r.pdf_name, "transcript": r.transcript_name} for r in RUNS.values()]
+             "pdf": r.pdf_name, "transcript": r.transcript_name,
+             "transcript_pdf": r.transcript_pdf_name, "transcript_md": r.transcript_md_name}
+            for r in RUNS.values()]
 
 
 @app.get("/api/runs/{run_id}/events")
@@ -222,11 +230,17 @@ async def run_events(run_id: str) -> StreamingResponse:
 async def list_reports() -> list[dict[str, Any]]:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     items = []
-    for pdf in sorted(REPORTS_DIR.glob("*.pdf"),
-                      key=lambda p: p.stat().st_mtime, reverse=True):
-        tr = pdf.with_name(pdf.stem + ".transcript.json")
+    # The transcript itself is also a sibling ".transcript.pdf" -- exclude it from
+    # this top-level glob so each run gets one row, not two.
+    reports = [p for p in REPORTS_DIR.glob("*.pdf") if ".transcript" not in p.name]
+    for pdf in sorted(reports, key=lambda p: p.stat().st_mtime, reverse=True):
+        tr_json = pdf.with_name(pdf.stem + ".transcript.json")
+        tr_pdf = pdf.with_name(pdf.stem + ".transcript.pdf")
+        tr_md = pdf.with_name(pdf.stem + ".transcript.md")
         items.append({"name": pdf.name,
-                      "transcript": tr.name if tr.exists() else None,
+                      "transcript": tr_json.name if tr_json.exists() else None,
+                      "transcript_pdf": tr_pdf.name if tr_pdf.exists() else None,
+                      "transcript_md": tr_md.name if tr_md.exists() else None,
                       "modified": pdf.stat().st_mtime})
     return items
 

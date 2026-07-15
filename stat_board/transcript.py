@@ -34,6 +34,7 @@ class Transcript:
     model: str
     started_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     hypothesis: str = ""
+    plan: str = ""
     key_questions: list[str] = field(default_factory=list)
     rounds: list[RoundRecord] = field(default_factory=list)
     final_report: str = ""
@@ -56,8 +57,10 @@ def _slug(text: str) -> str:
 
 
 def save(transcript: Transcript, out_dir: str | Path) -> dict[str, Path]:
-    """Write the Markdown report, render it to PDF, and dump the JSON transcript.
-    Returns {'pdf', 'md', 'json'} paths."""
+    """Write the Markdown report, render it to PDF, dump the JSON transcript, and
+    render a human-readable transcript of the full debate (Markdown + PDF) — every
+    agent's output each round, not just the final report.
+    Returns {'pdf', 'md', 'json', 'transcript_md', 'transcript_pdf'} paths."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
@@ -79,7 +82,18 @@ def save(transcript: Transcript, out_dir: str | Path) -> dict[str, Path]:
     json_path.write_text(json.dumps(asdict(transcript), indent=2, ensure_ascii=False),
                          encoding="utf-8")
 
-    return {"pdf": pdf_path, "md": md_path, "json": json_path}
+    transcript_md_text = _render_transcript_markdown(transcript)
+    transcript_md_path = out / f"{base}.transcript.md"
+    transcript_md_path.write_text(transcript_md_text, encoding="utf-8")
+
+    transcript_pdf_path = out / f"{base}.transcript.pdf"
+    report_mod.markdown_to_pdf(transcript_md_text, transcript_pdf_path,
+                               title=f"Transcript — {transcript.question}")
+
+    return {
+        "pdf": pdf_path, "md": md_path, "json": json_path,
+        "transcript_md": transcript_md_path, "transcript_pdf": transcript_pdf_path,
+    }
 
 
 def _render_report(t: Transcript) -> str:
@@ -88,3 +102,37 @@ def _render_report(t: Transcript) -> str:
               f"round(s) on model `{t.model}`. Every statistic was computed and "
               f"independently reproduced with the stat_board engine.*")
     return body + footer + "\n"
+
+
+def _render_transcript_markdown(t: Transcript) -> str:
+    """The full debate, human-readable: the judge's plan, then every agent's
+    output each round — not just the final report. Complements the JSON
+    transcript (machine-readable, exact) with something meant to actually be
+    read."""
+    parts: list[str] = [
+        f"# Transcript — {t.question}",
+        f"*Model: `{t.model}` · started {t.started_at} · {len(t.rounds)} round(s)*",
+        "\n## Plan\n",
+        f"**Hypothesis:** {t.hypothesis}" if t.hypothesis else "",
+    ]
+    if t.key_questions:
+        parts.append("**Key questions:**\n\n" + "\n".join(f"- {q}" for q in t.key_questions))
+    if t.plan:
+        parts.append(t.plan)
+
+    for r in t.rounds:
+        parts.append(f"\n---\n\n## Round {r.number}\n")
+        parts.append("### Analyst")
+        if r.analyst_tool_calls:
+            cmds = ", ".join(f"`{tc.get('command', '?')}`" for tc in r.analyst_tool_calls)
+            parts.append(f"*Ran {len(r.analyst_tool_calls)} engine call(s): {cmds}*\n")
+        parts.append(r.analyst_notes)
+        parts.append("\n### Frequentist critic\n" + r.frequentist)
+        parts.append("\n### Assumptions skeptic\n" + r.assumptions)
+        parts.append("\n### Bayesian critic\n" + r.bayesian)
+        parts.append("\n### Verifier\n" + r.verification)
+        parts.append(f"\n### Judge — {r.decision.upper()}\n" + r.judge_rationale)
+        if r.next_instructions:
+            parts.append(f"\n**Next round instructions:** {r.next_instructions}")
+
+    return "\n\n".join(p for p in parts if p) + "\n"

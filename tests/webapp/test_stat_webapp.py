@@ -29,6 +29,25 @@ def test_reports_endpoint_lists_the_reports_directory():
     assert isinstance(resp.json(), list)
 
 
+def test_reports_endpoint_does_not_double_count_the_transcript_pdf(tmp_path, monkeypatch):
+    from stat_board import webapp
+
+    monkeypatch.setattr(webapp, "REPORTS_DIR", tmp_path)
+    (tmp_path / "foo.pdf").write_bytes(b"%PDF-fake")
+    (tmp_path / "foo.transcript.json").write_text("{}")
+    (tmp_path / "foo.transcript.md").write_text("# Transcript\n")
+    (tmp_path / "foo.transcript.pdf").write_bytes(b"%PDF-fake")
+
+    resp = client.get("/api/reports")
+    assert resp.status_code == 200
+    items = resp.json()
+    assert len(items) == 1  # not 2 -- the transcript.pdf isn't its own report row
+    assert items[0]["name"] == "foo.pdf"
+    assert items[0]["transcript"] == "foo.transcript.json"
+    assert items[0]["transcript_pdf"] == "foo.transcript.pdf"
+    assert items[0]["transcript_md"] == "foo.transcript.md"
+
+
 def test_columns_endpoint_inspects_a_real_dataset(long_csv):
     resp = client.get("/api/columns", params={"data": str(long_csv)})
     assert resp.status_code == 200

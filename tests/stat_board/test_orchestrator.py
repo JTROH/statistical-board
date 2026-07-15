@@ -18,6 +18,7 @@ def test_dry_run_single_round_produces_a_complete_transcript(long_csv):
 
     assert isinstance(transcript, Transcript)
     assert transcript.hypothesis
+    assert transcript.plan
     assert len(transcript.key_questions) > 0
     assert len(transcript.rounds) == 1
 

@@ -157,7 +157,9 @@ async function loadReports() {
   try { const rs = await (await fetch("/api/reports")).json();
     $("reports").innerHTML = rs.length ? rs.map(r =>
       `<div class="report-item"><a href="/api/reports/${r.name}" target="_blank">${r.name}</a>`
-      + (r.transcript ? `<a href="/api/reports/${r.transcript}" target="_blank">transcript</a>` : "")
+      + (r.transcript_pdf ? `<a href="/api/reports/${r.transcript_pdf}" target="_blank">transcript (PDF)</a>` : "")
+      + (r.transcript_md ? `<a href="/api/reports/${r.transcript_md}" target="_blank">transcript (text)</a>` : "")
+      + (r.transcript ? `<a href="/api/reports/${r.transcript}" target="_blank">transcript (JSON)</a>` : "")
       + `</div>`).join("") : `<span class="spin">none yet</span>`;
   } catch {}
 }
@@ -195,7 +197,8 @@ function handle(e) {
         e.decision.toUpperCase());
   } else if (e.type === "done") {
     add("verifier", "Done", "").querySelector(".who").innerHTML +=
-      ` — <a href="/api/reports/${e.pdf}" target="_blank">open PDF report</a>`;
+      ` — <a href="/api/reports/${e.pdf}" target="_blank">open PDF report</a>`
+      + (e.transcript_pdf ? ` · <a href="/api/reports/${e.transcript_pdf}" target="_blank">open transcript</a>` : "");
     $("run").disabled = false; loadReports();
   } else if (e.type === "error") {
     add("judge", "Error", e.message).querySelector(".who").classList.add("err");

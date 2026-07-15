@@ -115,14 +115,17 @@ tool that executes computations in-process and feeds the results back.
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...        # or `ant auth login`, or a .env file
 
-# CLI — writes reports/<slug>.pdf (+ .md source + .transcript.json)
+# CLI — writes reports/<slug>.pdf (+ .md source), and a transcript of the full
+# debate (every agent's output each round, not just the final report) as both
+# a human-readable .transcript.md/.transcript.pdf and a machine-readable .transcript.json
 python3 -m stat_board "Do the groups differ?" \
     --data sample_data/long.csv --group-col group --value-col value --rounds 2
 
 # Dry run — exercises the full flow with stubbed agents, no API calls, zero spend
 python3 -m stat_board "Any question" --data sample_data/wide.csv --dry-run
 
-# Web UI — start runs in the browser, upload a dataset, watch the debate live (SSE)
+# Web UI — start runs in the browser, upload a dataset, watch the debate live (SSE);
+# both the report and the transcript (PDF/text/JSON) are downloadable once it finishes
 python3 -m stat_board.webapp            # → http://127.0.0.1:8643
 ```
 

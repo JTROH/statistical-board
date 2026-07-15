@@ -170,6 +170,7 @@ async def run(
     transcript.hypothesis = plan["hypothesis"]
     transcript.key_questions = plan.get("key_questions", [])
     plan_text = plan["plan"]
+    transcript.plan = plan_text
     open_qs = "\n".join(f"- {q}" for q in transcript.key_questions)
     # `instructions` for round 1 was set with the design context above.
     _log(f"Plan set. Hypothesis: {transcript.hypothesis[:80]}...")

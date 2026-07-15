@@ -55,9 +55,11 @@ def main() -> int:
         return 130
 
     paths = transcript_mod.save(result, args.out)
-    print(f"\n✓ Report (PDF): {paths['pdf']}")
-    print(f"✓ Report (MD):  {paths['md']}")
-    print(f"✓ Transcript:   {paths['json']}")
+    print(f"\n✓ Report (PDF):     {paths['pdf']}")
+    print(f"✓ Report (MD):      {paths['md']}")
+    print(f"✓ Transcript (PDF): {paths['transcript_pdf']}")
+    print(f"✓ Transcript (MD):  {paths['transcript_md']}")
+    print(f"✓ Transcript (JSON):{paths['json']}")
     return 0
 
 
