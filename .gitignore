@@ -7,7 +7,12 @@
 # --- Generated at runtime ----------------------------------------------------
 reports/
 uploads/
+studies/
 *_assets/
+validation/results/
+
+# --- Presets may carry company-specific ranges; keep the local ones out ---
+presets/local_*.json
 
 # --- Python ------------------------------------------------------------------
 __pycache__/

@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>doe-advisor</title>
+<link rel="stylesheet" href="styles.css">
+
+<style>
+/* Cross-link to the other half of the package. The two apps are separate
+   servers on purpose; this is the seam a user walks across. */
+.sibling-link { font-size: 0.85rem; margin: 0.4rem 0 0 0; opacity: 0.85; }
+.sibling-link a { color: inherit; }
+.sibling-link[data-up="no"] { opacity: 0.45; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>doe&#8209;advisor</h1>
+  <p class="tagline">Design options for upstream process development, with the tradeoffs made explicit.</p>
+  <p class="sibling-link" id="sibling">Already run the experiment?
+     <a href="http://127.0.0.1:8643" target="_blank" rel="noopener">Analyse it in the Statistical Board &rarr;</a></p>
+</header>
+
+<main>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="card" id="intake-card">
+    <h2>1. What are you studying?</h2>
+
+    <div class="row">
+      <label for="preset">Start from</label>
+      <select id="preset"></select>
+      <span class="hint" id="preset-note"></span>
+    </div>
+
+    <!-- Shown only when an API key is present. The form below is always the
+         source of truth; this is a typing shortcut, never a separate path. -->
+    <div id="chat-block" hidden>
+      <label for="chat-text">Or describe it in your own words</label>
+      <textarea id="chat-text" rows="3"
+        placeholder="e.g. I want to screen pH, DO, temperature and feed rate on titer in a 4-factor study, about 20 runs, mainly to find out which factors matter."></textarea>
+      <div class="row">
+        <button type="button" id="chat-fill" class="secondary">Fill the form from this</button>
+        <span class="hint">Claude fills the fields below. Check them before continuing — nothing is submitted until you do.</span>
+      </div>
+      <div id="chat-notes" class="notes" hidden></div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="card">
+    <h2>2. Factors</h2>
+    <p class="hint">The things you can set. Low and high are the edges of the range you want to explore.</p>
+    <table class="grid" id="factors">
+      <thead>
+        <tr><th>Name</th><th>Low</th><th>High</th><th>Units</th><th aria-label="remove"></th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <button type="button" id="add-factor" class="secondary small">+ Add factor</button>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="card">
+    <h2>3. Response</h2>
+    <p class="hint">
+      What you measure, and what you want to do with it. <strong>Target effect</strong> is the smallest change
+      worth detecting; <strong>noise SD</strong> is how much the result scatters when you repeat the same
+      settings. Supply both and the tool can compute power &mdash; leave them blank and it will say so rather
+      than guess. Only the first row is used for power.
+    </p>
+    <table class="grid" id="responses">
+      <thead>
+        <tr>
+          <th>Name</th><th>Units</th><th>Goal</th><th>Target effect</th><th>Noise SD</th><th aria-label="remove"></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <button type="button" id="add-response" class="secondary small">+ Add response</button>
+    <p class="hint" id="effect-note"></p>
+
+    <details class="explainer">
+      <summary>What do &ldquo;target effect&rdquo;, &ldquo;noise SD&rdquo; and &ldquo;power&rdquo; mean, and where do I get the numbers?</summary>
+      <dl>
+        <dt>Noise SD (standard deviation)</dt>
+        <dd>
+          Run the <em>same</em> settings several times and the results will not be identical. The SD is the
+          typical size of that scatter. It sets the smallest change that could be nothing but chance.
+          <br><strong>Where to get it:</strong> the centre points of a past study; repeat batches at one
+          set-point; or 4&ndash;6 repeat runs now &mdash; then SD &asymp; (highest &minus; lowest) &divide; 2
+          for 4 repeats, &divide; 2.5 for 6. Two repeats are not enough: the guess is easily off by half.
+        </dd>
+        <dt>Target effect</dt>
+        <dd>
+          The smallest change in the response you would actually act on. Not the change you hope for &mdash;
+          the smallest one that would matter. If a 0.3&nbsp;g/L gain in titer would change a decision, that is
+          the number. Same units as the response.
+        </dd>
+        <dt>Signal-to-noise (target effect &divide; noise SD)</dt>
+        <dd>
+          How big your signal is compared with the scatter. Above about 2 it is clear and small designs will
+          do. Between 1 and 2 it needs a careful design. Below 1 the change is smaller than the noise and
+          needs many runs. The line above the table shows yours as you type.
+        </dd>
+        <dt>Power</dt>
+        <dd>
+          The chance the study finds your target effect <em>if it is really there</em>. 80% power means a
+          1-in-5 chance of running everything and seeing nothing, even though the effect exists. It is not a
+          pass mark; it is the odds you are accepting. More runs, a larger target effect, or less noise all
+          raise it.
+        </dd>
+        <dt>&ldquo;Smallest change it can reliably see&rdquo;</dt>
+        <dd>
+          The same fact the other way round: the smallest real change a design would find at 80% power,
+          in your units. If that is bigger than your target effect, the design is too small for your
+          question. Each option also shows what happens to power if your noise SD guess is 1.5&times; too
+          low, because the noise figure is the one people are least sure of.
+        </dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="card">
+    <h2>4. What do you want to be able to fit?</h2>
+    <div class="row wrap">
+      <div class="field">
+        <label for="model-order">Model</label>
+        <select id="model-order"></select>
+      </div>
+      <div class="field">
+        <label for="max-runs">Run budget</label>
+        <input type="number" id="max-runs" min="3" step="1" placeholder="no limit">
+      </div>
+      <div class="field">
+        <label for="centre">Centre points</label>
+        <input type="number" id="centre" min="0" step="1" value="3">
+      </div>
+      <div class="field">
+        <label for="losses">Runs you might lose</label>
+        <input type="number" id="losses" min="0" step="1" value="1">
+      </div>
+    </div>
+    <p class="hint" id="model-note"></p>
+  </section>
+
+  <div class="actions">
+    <button type="button" id="run" class="primary">Show me the options</button>
+    <span id="status" class="status"></span>
+  </div>
+
+  <div id="error" class="error" hidden></div>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section id="results" hidden>
+    <div class="card">
+      <h2>The options</h2>
+      <div class="table-scroll">
+        <table class="grid results" id="options-table">
+          <thead>
+            <tr>
+              <th>Option</th><th>Runs</th><th>Power</th><th>Confounding</th>
+              <th>Prediction&nbsp;(I)</th><th>Robustness</th><th>Score</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="hint">
+        Lower I is better; every other column is better higher.
+        <strong>Power</strong> is the chance of finding your target effect if it is real &mdash; 80% means a
+        1-in-5 chance of missing it.
+      </p>
+      <p class="hint" id="power-basis"></p>
+    </div>
+
+    <div class="card">
+      <h2>How they compare</h2>
+      <img id="chart-power" alt="Curve of power against run count, with each option marked on it" hidden>
+      <img id="chart-options" alt="Bar chart comparing each option on power, confounding, prediction precision and robustness">
+      <img id="chart-fds" alt="Curve showing prediction uncertainty across the design space for each option">
+      <img id="chart-layout" alt="Scatter plots showing where the runs of the recommended design fall">
+    </div>
+
+    <div class="card" id="detail-card">
+      <h2>In detail</h2>
+      <div id="details"></div>
+    </div>
+
+    <details class="card" id="rejected-card">
+      <summary><strong>Designs that were rejected</strong> <span class="hint" id="rejected-count"></span></summary>
+      <p class="hint">
+        Shown deliberately. &ldquo;The cheap screen you were about to run cannot fit the model you asked
+        for&rdquo; is often the most useful thing here.
+      </p>
+      <ul id="rejected"></ul>
+    </details>
+
+    <div class="actions">
+      <button type="button" id="download" class="primary">Download the memo (PDF)</button>
+      <span id="memo-status" class="status"></span>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <span id="footer-version"></span> &middot; runs entirely on your machine &middot;
+  classical designs only &mdash; constrained spaces, blocking and must&#8209;include runs are not yet supported
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

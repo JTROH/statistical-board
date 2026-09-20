@@ -1,0 +1,87 @@
+{
+  "id": "upstream_mammalian",
+  "label": "Mammalian fed-batch (CHO)",
+  "order": 20,
+  "description": "Typical bioreactor factors and quality attributes for a CHO fed-batch process. Ranges are conventional starting points, not recommendations — replace them with your own process knowledge.",
+  "factors": [
+    {
+      "name": "pH",
+      "low": 6.8,
+      "high": 7.2,
+      "units": ""
+    },
+    {
+      "name": "dissolved oxygen",
+      "low": 30,
+      "high": 60,
+      "units": "%"
+    },
+    {
+      "name": "temperature",
+      "low": 35.0,
+      "high": 37.0,
+      "units": "C"
+    },
+    {
+      "name": "feed rate",
+      "low": 2,
+      "high": 6,
+      "units": "% v/v per day"
+    },
+    {
+      "name": "agitation",
+      "low": 150,
+      "high": 300,
+      "units": "rpm"
+    },
+    {
+      "name": "seeding density",
+      "low": 0.3,
+      "high": 0.8,
+      "units": "e6 cells/mL"
+    }
+  ],
+  "responses": [
+    {
+      "name": "titer",
+      "units": "g/L",
+      "goal": "maximize",
+      "target_effect": 0.5,
+      "noise_sd": 0.25
+    },
+    {
+      "name": "viable cell density",
+      "units": "e6 cells/mL",
+      "goal": "screen",
+      "target_effect": 2.0,
+      "noise_sd": 1.0
+    },
+    {
+      "name": "viability",
+      "units": "%",
+      "goal": "screen",
+      "target_effect": 5.0,
+      "noise_sd": 2.5
+    },
+    {
+      "name": "aggregates",
+      "units": "%",
+      "goal": "minimize",
+      "target_effect": 1.0,
+      "noise_sd": 0.4
+    },
+    {
+      "name": "afucosylation",
+      "units": "%",
+      "goal": "target",
+      "target_value": null,
+      "target_effect": 2.0,
+      "noise_sd": 0.8
+    }
+  ],
+  "defaults": {
+    "model_order": "interaction",
+    "n_center_points": 3,
+    "expected_run_losses": 1
+  }
+}

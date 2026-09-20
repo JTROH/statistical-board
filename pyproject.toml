@@ -5,7 +5,11 @@ addopts = "-q"
 [tool.ruff]
 line-length = 120
 target-version = "py313"
-extend-exclude = ["reports", "uploads", "sample_data", "examples", "desktop_gui"]
+extend-exclude = [
+    "reports", "uploads", "studies", "sample_data", "examples",
+    "validation/datasets", "presets",
+    "desktop_gui/statistical_analysis.py",  # tkinter widget code, not linted
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -19,3 +23,6 @@ ignore = ["E702"]
 # captions) read worse wrapped than long.
 "stat_board/engine_tool.py" = ["E501"]
 "stat_board/figures.py" = ["E501"]
+# Long single-line prose strings (narration templates, plain-English alias
+# statements) read worse wrapped than long.
+"doe_advisor/narrate.py" = ["E501"]
