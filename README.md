@@ -31,6 +31,7 @@ showed a bend.
 | **Skill** | `/doe-plan` | `/stat-board` · `/stat-advisor` |
 | **Package** | `doe_advisor/` | `stat_board/` |
 | **Web app** | `python3 run_doe.py --open` → :8711 | `python3 -m stat_board.webapp` → :8643 |
+| **Both, one app** | `python3 run_app.py --open` → :8700 (tabs: Plan · Analyse) | |
 | **Does** | Generates and scores designs, writes a randomised run sheet | Fits the model, vets every number, writes a PDF report |
 | **Sees** | Only the design matrix — never a result | Only results — cannot generate a design |
 

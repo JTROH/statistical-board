@@ -68,6 +68,9 @@ if `Rscript` is missing; the JMP leg is manual (`validation/JMP_INSTRUCTIONS.md`
 ### Running each front-end
 
 ```bash
+# --- Both halves in one local app, as tabs (key needed only for live board runs) ---
+python3 run_app.py --open                              # pdstat/webapp.py, 127.0.0.1:8700
+
 # --- Design side (no API key) ---
 python3 -m doe_advisor options --spec spec.json        # JSON in / JSON out
 python3 -m doe_advisor runsheet --spec spec.json --out runs.csv
@@ -243,6 +246,10 @@ hand-tuned subset Story understands — not general CSS — and `_strip_top_blee
 `stat_board/report.py` keeps only what is specific to a statistical report
 (`convert_file`, the appendix wiring, the CLI) and re-exports `markdown_to_pdf`
 so existing callers keep working.
+
+`pdstat/webapp.py` mounts both FastAPI apps unchanged (`/design/`, `/analyse/`) behind a tab
+shell. It works only because both front ends call `api/...` **relative** URLs — an absolute
+`/api/...` would hit the wrong app. `tests/webapp/test_workbench.py` guards that.
 
 `pdstat/compute/` is an empty stub, reserved for hoisting `stat_board/engine` up
 when a third tool needs it. **That refactor is deliberately not done yet** — do not

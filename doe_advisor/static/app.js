@@ -338,7 +338,7 @@ async function runDesign() {
   $("run").disabled = true;
   try {
     const form = readForm();
-    const data = await postJSON("/api/design", form);
+    const data = await postJSON("api/design", form);
     state.lastForm = form;
 
     if (!data.options.length) {
@@ -375,7 +375,7 @@ async function downloadMemo() {
   $("memo-status").textContent = "Building the memo…";
   $("download").disabled = true;
   try {
-    const response = await fetch("/api/memo", {
+    const response = await fetch("api/memo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(state.lastForm || readForm()),
@@ -405,7 +405,7 @@ async function fillFromDescription() {
   $("chat-notes").hidden = true;
   $("chat-fill").disabled = true;
   try {
-    const data = await postJSON("/api/intake/extract", { text: $("chat-text").value });
+    const data = await postJSON("api/intake/extract", { text: $("chat-text").value });
     writeForm(data.form || {});
     const notes = (data.form && data.form.notes) || [];
     if (notes.length) {
@@ -453,8 +453,8 @@ function applyPreset(id) {
 
 async function boot() {
   const [capabilities, presets] = await Promise.all([
-    fetch("/api/capabilities").then((r) => r.json()),
-    fetch("/api/presets").then((r) => r.json()),
+    fetch("api/capabilities").then((r) => r.json()),
+    fetch("api/presets").then((r) => r.json()),
   ]);
   state.capabilities = capabilities;
   state.presets = presets.presets;

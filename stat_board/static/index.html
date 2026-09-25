@@ -139,13 +139,13 @@ const NAMES = {analyst:"Analyst", frequentist:"Frequentist critic", assumptions:
                bayesian:"Bayesian critic", verifier:"Verifier", judge:"Judge"};
 
 async function health() {
-  try { const h = await (await fetch("/api/health")).json();
+  try { const h = await (await fetch("api/health")).json();
     $("health").textContent = (h.credentials ? "✓ credentials" : "✗ no credentials — dry run only")
       + " · " + h.model + " · effort " + h.effort;
   } catch {}
 }
 async function loadDatasets() {
-  try { const ds = await (await fetch("/api/datasets")).json();
+  try { const ds = await (await fetch("api/datasets")).json();
     $("datasets").innerHTML = ds.map(d => `<option value="${d}">`).join("");
     if (ds.length && !$("data").value) $("data").placeholder = ds[0];
     loadColumns();
@@ -155,7 +155,7 @@ async function loadColumns() {
   const data = $("data").value || $("data").placeholder;
   if (!data) { $("cols").textContent = ""; return; }
   try {
-    const c = await (await fetch("/api/columns?data=" + encodeURIComponent(data))).json();
+    const c = await (await fetch("api/columns?data=" + encodeURIComponent(data))).json();
     if (!c.columns) { $("cols").textContent = ""; return; }
     $("numcols").innerHTML = (c.numeric || []).map(x => `<option value="${x}">`).join("");
     $("catcols").innerHTML = (c.categorical || []).map(x => `<option value="${x}">`).join("");
@@ -164,12 +164,12 @@ async function loadColumns() {
   } catch { $("cols").textContent = ""; }
 }
 async function loadReports() {
-  try { const rs = await (await fetch("/api/reports")).json();
+  try { const rs = await (await fetch("api/reports")).json();
     $("reports").innerHTML = rs.length ? rs.map(r =>
-      `<div class="report-item"><a href="/api/reports/${r.name}" target="_blank">${r.name}</a>`
-      + (r.transcript_pdf ? `<a href="/api/reports/${r.transcript_pdf}" target="_blank">transcript (PDF)</a>` : "")
-      + (r.transcript_md ? `<a href="/api/reports/${r.transcript_md}" target="_blank">transcript (text)</a>` : "")
-      + (r.transcript ? `<a href="/api/reports/${r.transcript}" target="_blank">transcript (JSON)</a>` : "")
+      `<div class="report-item"><a href="api/reports/${r.name}" target="_blank">${r.name}</a>`
+      + (r.transcript_pdf ? `<a href="api/reports/${r.transcript_pdf}" target="_blank">transcript (PDF)</a>` : "")
+      + (r.transcript_md ? `<a href="api/reports/${r.transcript_md}" target="_blank">transcript (text)</a>` : "")
+      + (r.transcript ? `<a href="api/reports/${r.transcript}" target="_blank">transcript (JSON)</a>` : "")
       + `</div>`).join("") : `<span class="spin">none yet</span>`;
   } catch {}
 }
@@ -207,8 +207,8 @@ function handle(e) {
         e.decision.toUpperCase());
   } else if (e.type === "done") {
     add("verifier", "Done", "").querySelector(".who").innerHTML +=
-      ` — <a href="/api/reports/${e.pdf}" target="_blank">open PDF report</a>`
-      + (e.transcript_pdf ? ` · <a href="/api/reports/${e.transcript_pdf}" target="_blank">open transcript</a>` : "");
+      ` — <a href="api/reports/${e.pdf}" target="_blank">open PDF report</a>`
+      + (e.transcript_pdf ? ` · <a href="api/reports/${e.transcript_pdf}" target="_blank">open transcript</a>` : "");
     $("run").disabled = false; loadReports();
   } else if (e.type === "error") {
     add("judge", "Error", e.message).querySelector(".who").classList.add("err");
@@ -220,7 +220,7 @@ $("file").onchange = async () => {
   $("uploadmsg").textContent = "uploading " + f.name + "…";
   try {
     const content = await f.text();
-    const r = await (await fetch("/api/upload", {method:"POST",
+    const r = await (await fetch("api/upload", {method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({filename: f.name, content})})).json();
     if (r.path) { $("data").value = r.path; $("uploadmsg").textContent = "✓ uploaded → " + r.path; loadDatasets(); }
@@ -244,18 +244,24 @@ $("run").onclick = async () => {
   $("feed").innerHTML = ""; $("run").disabled = true;
   add("analyst", "Starting", "Question: " + body.question + "\nData: " + body.data);
   let res;
-  try { res = await (await fetch("/api/runs", {method:"POST", headers:{"Content-Type":"application/json"},
+  try { res = await (await fetch("api/runs", {method:"POST", headers:{"Content-Type":"application/json"},
                                                body: JSON.stringify(body)})).json(); }
   catch (err) { add("judge","Error",""+err); $("run").disabled=false; return; }
   if (res.detail || !res.id) { add("judge","Error", res.detail || "failed to start")
       .querySelector(".who").classList.add("err"); $("run").disabled=false; return; }
-  const src = new EventSource(`/api/runs/${res.id}/events`);
+  const src = new EventSource(`api/runs/${res.id}/events`);
   src.onmessage = ev => { const e = JSON.parse(ev.data); handle(e);
     if (e.type==="done"||e.type==="error") src.close(); };
   src.onerror = () => src.close();
 };
 $("data").addEventListener("change", loadColumns);
 health(); loadDatasets(); loadReports();
+</script>
+<script>
+// Inside the combined workbench (run_app.py) the sibling is a tab, not another port.
+if (window.top !== window) document.querySelector("#sibling a").onclick = (e) => {
+  e.preventDefault(); window.parent.postMessage({ tab: "design" }, location.origin);
+};
 </script>
 </body>
 </html>

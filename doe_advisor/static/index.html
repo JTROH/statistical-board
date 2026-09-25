@@ -213,5 +213,11 @@
 </footer>
 
 <script src="app.js"></script>
+<script>
+// Inside the combined workbench (run_app.py) the sibling is a tab, not another port.
+if (window.top !== window) document.querySelector("#sibling a").onclick = (e) => {
+  e.preventDefault(); window.parent.postMessage({ tab: "analyse" }, location.origin);
+};
+</script>
 </body>
 </html>
