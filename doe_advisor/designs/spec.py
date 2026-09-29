@@ -13,12 +13,12 @@ units happens only at the edges (``Factor.decode``, memo export).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 
 
-class ModelOrder(str, Enum):
+class ModelOrder(StrEnum):
     """How ambitious a model the scientist wants to be able to fit.
 
     This is the single biggest lever on run count, which is why the explorer
@@ -68,7 +68,7 @@ class Factor:
         return (np.asarray(real) - self.center) / self.half_range
 
 
-class ResponseGoal(str, Enum):
+class ResponseGoal(StrEnum):
     """What the scientist wants to do with a response.
 
     The goal does not change the arithmetic — power and aliasing are the same

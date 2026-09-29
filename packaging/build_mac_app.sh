@@ -9,8 +9,7 @@ if [ ! -x .venv/bin/python ]; then
   "$PY" -m venv .venv
 fi
 .venv/bin/pip install -q --upgrade pip
-# pandas 3 changes dtype inference that stat_board/prep.py relies on; stay on 2.x until that is fixed.
-.venv/bin/pip install -q -r requirements.txt "pandas<3" pywebview pyinstaller
+.venv/bin/pip install -q -r requirements.txt pywebview pyinstaller
 
 .venv/bin/pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/workbench.spec
 
