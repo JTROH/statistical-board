@@ -32,10 +32,27 @@ showed a bend.
 | **Package** | `doe_advisor/` | `stat_board/` |
 | **Web app** | `python3 run_doe.py --open` → :8711 | `python3 -m stat_board.webapp` → :8643 |
 | **Both, one app** | `python3 run_app.py --open` → :8700 (tabs: Plan · Analyse) | |
+| **Desktop app** | `python3 run_desktop.py`, or build `Statistical Workbench.app` with `packaging/build_mac_app.sh` | |
 | **Does** | Generates and scores designs, writes a randomised run sheet | Fits the model, vets every number, writes a PDF report |
 | **Sees** | Only the design matrix — never a result | Only results — cannot generate a design |
 
 <p align="center"><em>See <a href="examples/sample_report.pdf">examples/sample_report.pdf</a> for a full generated report (figures + detailed tables included).</em></p>
+
+## Desktop app (macOS)
+
+The same two tabs in their own window, with no browser and no fixed port.
+
+```bash
+pip install pywebview
+python3 run_desktop.py                 # from source
+packaging/build_mac_app.sh             # builds dist/Statistical Workbench.app
+```
+
+Drag `dist/Statistical Workbench.app` into `/Applications`. The app saves
+reports and uploads in `~/Documents/Statistical Workbench/`, and copies the
+sample data there on first launch. For live board runs, put
+`ANTHROPIC_API_KEY=...` in a `.env` file in that folder. The app is not
+signed, so the first time, right-click it and choose **Open**.
 
 ## Planning an experiment (`doe_advisor`)
 

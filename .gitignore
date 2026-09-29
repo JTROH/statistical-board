@@ -28,3 +28,7 @@ venv/
 
 # --- OS ----------------------------------------------------------------------
 .DS_Store
+
+# --- Desktop app build output (packaging/build_mac_app.sh) -------------------
+build/
+dist/

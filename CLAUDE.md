@@ -70,6 +70,8 @@ if `Rscript` is missing; the JMP leg is manual (`validation/JMP_INSTRUCTIONS.md`
 ```bash
 # --- Both halves in one local app, as tabs (key needed only for live board runs) ---
 python3 run_app.py --open                              # pdstat/webapp.py, 127.0.0.1:8700
+python3 run_desktop.py                                 # pdstat/desktop.py: same app in a pywebview window, free port
+packaging/build_mac_app.sh                             # PyInstaller -> dist/Statistical Workbench.app (data: ~/Documents/Statistical Workbench)
 
 # --- Design side (no API key) ---
 python3 -m doe_advisor options --spec spec.json        # JSON in / JSON out
