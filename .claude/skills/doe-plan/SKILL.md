@@ -104,13 +104,14 @@ python3 -m stat_board.engine doe-optimum --data <prev.csv> --formula "..." --fac
 python3 -m stat_board.engine vif --data <prev.csv> --formula "..."
 python3 -m stat_board.engine predict --data <prev.csv> --formula "..."
 python3 -m stat_board.engine regression --data <prev.csv> --formula "..."   # pass as fit=
+python3 -m stat_board.engine stationary-point --data <prev.csv> --formula "..." --factor F1 --factor F2   # quadratic only; pass as stationary=
 ```
 
 ```python
 from doe_advisor.augment import form_from_diagnostics
 ```
 
-`form_from_diagnostics(coverage, optimum, vif, predict, fit=..., response=...)` returns
+`form_from_diagnostics(coverage, optimum, vif, predict, fit=..., stationary=..., response=...)` returns
 `{"form": ..., "findings": ..., "rationale": ...}`. What it does:
 
 | Diagnostic said | The next design does |
@@ -119,6 +120,8 @@ from doe_advisor.augment import form_from_diagnostics
 | Centre runs show **curvature** (or none were run) | upgrades to a quadratic model — a CCD or Box-Behnken |
 | Curvature is **underpowered** | adds centre points |
 | Terms are **confounded** (high VIF) | flags that the confound must be broken |
+| The fitted **maximum/minimum lies outside** the tested range | widens toward it (wins over the boundary rule) |
+| The fitted maximum/minimum lies **inside** | proposes confirmation runs at that point |
 | The fit **measured the noise** (pure error, else residual) | fills a blank `noise_sd` with it, plus `noise_df`, so the power stress test uses the 80% upper bound instead of a flat 1.5× — the noise is in the fitted scale, so keep the response on the same (e.g. log) scale |
 | Runs are **influential** | proposes confirmation runs |
 

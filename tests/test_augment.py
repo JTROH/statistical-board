@@ -172,3 +172,32 @@ def test_entered_noise_is_kept(diagnostics, curved_csv):
     out = augment.form_from_diagnostics(**diagnostics, fit=fit, response={"name": "y", "noise_sd": 5.0})
     assert out["form"]["responses"][0]["noise_sd"] == 5.0
     assert "noise_df" not in out["form"]["responses"][0]
+
+
+# ---- the stationary point steers the next design ---- #
+
+def _stationary(kind, **loc):
+    return {"kind": kind, "location": {
+        f: {"value": v, "tested_range": [lo, hi], "inside_tested_range": lo <= v <= hi}
+        for f, (v, lo, hi) in loc.items()}}
+
+
+def test_stationary_maximum_outside_widens_toward_it(diagnostics):
+    sp = _stationary("maximum", x1=(-1.6, -1.0, 1.0), x2=(0.2, -1.0, 1.0))
+    out = augment.form_from_diagnostics(**diagnostics, stationary=sp)
+    x1 = next(f for f in out["form"]["factors"] if f["name"] == "x1")
+    # The boundary rule alone would widen x1 upward (best tested corner is high);
+    # the fitted maximum says down, and wins.
+    assert x1["low"] < -1.0 and x1["high"] == 1.0
+    assert any(f["trigger"] == "stationary_point_outside" for f in out["findings"])
+
+
+def test_stationary_maximum_inside_asks_for_confirmation_runs():
+    fired = augment.findings(stationary=_stationary("maximum", x1=(0.3, -1.0, 1.0), x2=(-0.2, -1.0, 1.0)))
+    hit = next(f for f in fired if f["trigger"] == "stationary_point_inside")
+    assert hit["action"] == "confirmation_runs"
+    assert hit["point"] == {"x1": 0.3, "x2": -0.2}
+
+
+def test_a_saddle_steers_nothing():
+    assert augment.findings(stationary=_stationary("saddle", x1=(3.0, -1.0, 1.0), x2=(0.0, -1.0, 1.0))) == []

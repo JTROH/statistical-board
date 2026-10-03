@@ -784,6 +784,127 @@ def doe_optimum(path: str, formula: str, factors: list[str], value: str) -> dict
     }
 
 
+def stationary_point(path: str, formula: str, factors: list[str], *, alpha: float = 0.05) -> dict[str, Any]:
+    """Canonical analysis of a fitted second-order model: where the surface is
+    flat, whether that point is a maximum, minimum or saddle, and how precisely
+    it is located.
+
+    Complements ``doe-optimum``, which ranks only tested settings. This one may
+    land between them — or outside the tested region, which it flags rather
+    than hides. The location's CI is a delta-method interval: a ratio of noisy
+    coefficients, so it is approximate and widens fast when the curvature is
+    weak.
+
+    Works for any formula that is quadratic in ``factors`` (main effects,
+    interactions, squared terms, in natural units, with or without other
+    columns, which are held at their mean / mode). The gradient and Hessian are
+    read off the model's own design matrix by central differences, exact for a
+    quadratic; a formula that is not quadratic is refused, not approximated.
+    """
+    import patsy
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    design_info = model.model.data.design_info
+    k = len(factors)
+    lows = np.array([float(df[f].min()) for f in factors])
+    highs = np.array([float(df[f].max()) for f in factors])
+    centre, half = (lows + highs) / 2.0, (highs - lows) / 2.0
+    if np.any(half <= 0):
+        raise ValueError("every factor needs at least two tested levels")
+    ref = {}
+    for c in df.columns:
+        if c not in factors:
+            ref[c] = df[c].mean() if pd.api.types.is_numeric_dtype(df[c]) else df[c].mode().iloc[0]
+
+    def rows(coded: np.ndarray) -> np.ndarray:
+        """Design-matrix rows for points given in coded units (-1..+1 = tested range)."""
+        coded = np.atleast_2d(coded)
+        frame = pd.DataFrame([{**ref, **dict(zip(factors, centre + half * u, strict=True))} for u in coded])
+        return np.asarray(patsy.build_design_matrices([design_info], frame)[0], float)
+
+    # Linear operators: gradient G (k x p) and Hessian Hs (k x k x p) at the
+    # centre, so that g = G @ beta and H = Hs @ beta for any coefficient vector.
+    d = 0.5
+    eye = np.eye(k)
+    x0 = rows(np.zeros(k))[0]
+    G = np.array([(rows(d * eye[i])[0] - rows(-d * eye[i])[0]) / (2 * d) for i in range(k)])
+    Hs = np.empty((k, k, x0.size))
+    for i in range(k):
+        Hs[i, i] = (rows(d * eye[i])[0] - 2 * x0 + rows(-d * eye[i])[0]) / d**2
+        for j in range(i + 1, k):
+            Hs[i, j] = Hs[j, i] = (
+                rows(d * (eye[i] + eye[j]))[0] - rows(d * (eye[i] - eye[j]))[0]
+                - rows(d * (-eye[i] + eye[j]))[0] + rows(-d * (eye[i] + eye[j]))[0]
+            ) / (4 * d**2)
+
+    # Refuse anything that is not exactly quadratic in the factors.
+    probe = np.random.default_rng(0).uniform(-1.5, 1.5, size=(8, k))
+    quad = x0 + probe @ G + 0.5 * np.einsum("ni,ijp,nj->np", probe, Hs, probe)
+    if not np.allclose(rows(probe), quad, atol=1e-8 * max(1.0, float(np.abs(rows(probe)).max()))):
+        raise ValueError("the formula is not quadratic in the given factors; canonical analysis needs a "
+                         "second-order model (main effects, interactions, squared terms)")
+
+    # Structural check, before looking at any estimate: an interaction-only
+    # model has a Hessian too, but calling it a saddle would report the
+    # formula, not the data.
+    missing = [f for i, f in enumerate(factors) if not np.any(np.abs(Hs[i, i]) > 1e-12)]
+    if missing:
+        raise ValueError(f"no squared term for {', '.join(missing)}: the model has no curvature in that "
+                         "direction, so it cannot locate an optimum (add I(x**2) for every factor)")
+
+    beta = np.asarray(model.params, float)
+    cov = np.asarray(model.cov_params(), float)
+    g, H = G @ beta, Hs @ beta
+    eigvals = np.linalg.eigvalsh(H)
+    if np.min(np.abs(eigvals)) < 1e-12 * max(1.0, float(np.abs(eigvals).max())):
+        raise ValueError("the fitted surface has no curvature along some direction (singular Hessian); "
+                         "a squared term for every factor is needed")
+    u = -np.linalg.solve(H, g)  # stationary point, coded units
+
+    # Delta method: du/dbeta_j = -H^-1 (G_j + Hs_j u).
+    H_inv = np.linalg.inv(H)
+    J = -H_inv @ (G + np.einsum("ijp,j->ip", Hs, u))
+    se_u = np.sqrt(np.clip(np.diag(J @ cov @ J.T), 0.0, None))
+    tcrit = float(stats.t.ppf(1 - alpha / 2, model.df_resid))
+
+    natural = centre + half * u
+    se_nat = half * se_u
+    kind = "maximum" if np.all(eigvals < 0) else ("minimum" if np.all(eigvals > 0) else "saddle")
+    point = {**ref, **dict(zip(factors, natural, strict=True))}
+    pred = model.get_prediction(pd.DataFrame([point])).summary_frame(alpha=alpha).iloc[0]
+    location = {}
+    for i, f in enumerate(factors):
+        location[f] = {
+            "value": float(natural[i]), "std_err": float(se_nat[i]),
+            "ci": [float(natural[i] - tcrit * se_nat[i]), float(natural[i] + tcrit * se_nat[i])],
+            "tested_range": [float(lows[i]), float(highs[i])],
+            "inside_tested_range": bool(lows[i] - 1e-9 <= natural[i] <= highs[i] + 1e-9),
+        }
+    inside = all(v["inside_tested_range"] for v in location.values())
+    if kind == "saddle":
+        verdict = ("The surface is a saddle: it rises in some directions and falls in others, so there is "
+                   "no single best setting. Use doe-optimum for the best tested setting.")
+    elif not inside:
+        verdict = (f"The fitted {kind} lies outside the tested region; the model cannot vouch for it. "
+                   "Treat it as a direction to explore, not a setting to run.")
+    else:
+        verdict = f"The fitted surface has a {kind} inside the tested region."
+    return {
+        "analysis": "stationary_point", "formula": formula, "factors": factors, "alpha": alpha,
+        "kind": kind, "inside_tested_region": inside, "location": location,
+        "predicted": float(pred["mean"]),
+        "predicted_ci": [float(pred["mean_ci_lower"]), float(pred["mean_ci_upper"])],
+        "eigenvalues_coded": [float(v) for v in eigvals],
+        "verdict": verdict,
+        "note": "Location CIs are delta-method approximations; they are unreliable when the "
+                "curvature itself is barely significant.",
+    }
+
+
 def _count_coefs(model, alpha: float, skip: tuple[str, ...] = ()) -> dict[str, Any]:
     """Coefficient table for a count model, reported as incidence-rate ratios
     (IRR = exp(coef): the multiplicative change in the event rate per unit)."""

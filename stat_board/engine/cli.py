@@ -123,6 +123,12 @@ def build_parser() -> argparse.ArgumentParser:
     opt.add_argument("--factor", action="append", required=True, dest="factors")
     opt.add_argument("--value", required=True, help="numeric outcome column")
 
+    sp = sub.add_parser("stationary-point", help="canonical analysis: max/min/saddle of a quadratic model, with CI")
+    sp.add_argument("--data", required=True)
+    sp.add_argument("--formula", required=True)
+    sp.add_argument("--factor", action="append", required=True, dest="factors")
+    sp.add_argument("--alpha", type=float, default=0.05)
+
     return parser
 
 
@@ -191,6 +197,8 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return analyses.box_cox(args.data, args.formula, alpha=args.alpha)
     if cmd == "design-coverage":
         return analyses.design_coverage(args.data, args.factors, value=args.value)
+    if cmd == "stationary-point":
+        return analyses.stationary_point(args.data, args.formula, args.factors, alpha=args.alpha)
     if cmd == "doe-optimum":
         return analyses.doe_optimum(args.data, args.formula, args.factors, args.value)
     raise ValueError(f"unknown command: {cmd}")

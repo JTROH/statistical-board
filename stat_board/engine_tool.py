@@ -22,7 +22,8 @@ _GROUP_COMMANDS = {
 # Commands that run on the whole table by column name (multi-factor / standalone).
 _STANDALONE = {"regression", "two-way-anova", "ancova", "poisson", "negbin",
                "chisquare", "power", "correct",
-               "predict", "vif", "box-cox", "design-coverage", "doe-optimum"}
+               "predict", "vif", "box-cox", "design-coverage", "doe-optimum",
+               "stationary-point"}
 
 TOOL_NAME = "run_stat"
 
@@ -56,7 +57,10 @@ def build_tool() -> dict[str, Any]:
             "regression/two-way-anova/ancova output also carries a lack_of_fit F test "
             "(when replicated settings such as centre points exist) and a Breusch-Pagan "
             "constant-variance check; box-cox (formula) gives the best power transform "
-            "of the response with a CI — use it before deciding between raw and log scale."
+            "of the response with a CI — use it before deciding between raw and log scale. "
+            "stationary-point (formula + factors) is canonical analysis of a quadratic model: "
+            "max/min/saddle, its location with CIs, and whether it lies inside the tested "
+            "region — the untested-optimum counterpart to doe-optimum."
         ),
         "input_schema": {
             "type": "object",
@@ -175,6 +179,8 @@ def make_executor(
                 res = analyses.box_cox(data_path, inp["formula"], alpha=a)
             elif cmd == "design-coverage":
                 res = analyses.design_coverage(data_path, inp["factors"], value=inp.get("value"))
+            elif cmd == "stationary-point":
+                res = analyses.stationary_point(data_path, inp["formula"], inp["factors"], alpha=a)
             elif cmd == "doe-optimum":
                 res = analyses.doe_optimum(data_path, inp["formula"], inp["factors"], inp["value"])
             else:

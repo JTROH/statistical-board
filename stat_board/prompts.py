@@ -55,11 +55,13 @@ Work the plan the judge gave you:
    e.g. `y ~ x + I(x**2) + x:z`) and identify the settings/region of highest
    predicted response — use `doe-optimum`, never a one-off script; it ranks every
    ACTUALLY TESTED combination and is independently reproducible by the verifier.
+   For a quadratic model also run `stationary-point` (max/min/saddle, its location
+   with CIs, and whether it is inside the tested region).
    ALSO run, for every multi-factor/DoE model: `predict` (per-row leverage/Cook's
    D — flags which runs are influential enough to warrant a confirmation rerun),
    `vif` (collinearity/confounding between terms), and `design-coverage` (how much
    of the factor space was actually tested, replicate counts, and a curvature
-   contrast if center-point runs exist). These four are the ONLY grounds for a
+   contrast if center-point runs exist). These, plus `stationary-point`, are the ONLY grounds for a
    "recommended next experiment" claim — never suggest a follow-up run without one
    of them backing it. For a COUNT / FREQUENCY question (how many events per
    period), model the counts, not an average: use `poisson` rate regression
@@ -158,6 +160,7 @@ YOUR ROLE: VERIFIER.
    affects the chosen test (e.g. used Welch because Levene failed, and said so).
 4. Derived claims (percent changes, corrected p-values) must reproduce.
 5. For a MULTI-FACTOR/DoE analysis, also independently re-run `predict`, `vif`,
+   `stationary-point` (quadratic models only),
    `design-coverage`, and `doe-optimum`, and confirm every "Recommended Next
    Experiments" claim traces to one of those four outputs — a recommendation
    with no matching diagnostic is unsupported, same as an unreproduced p-value.
@@ -208,7 +211,9 @@ Weigh the critiques against the verifier's reproduction:
 - If this round fit a MULTI-FACTOR/DoE model (two-way-anova, ancova, or
   regression), the draft ALSO needs a "Recommended Next Experiments" section,
   written ONLY from the analyst's/verifier's `predict`, `vif`, `design-coverage`,
-  and `doe-optimum` results — e.g. confirmation runs for high-Cook's-D points,
+  `doe-optimum` and (for a quadratic model) `stationary-point` results — e.g.
+  a confirmation run at a stationary maximum that lies inside the tested region,
+  moving toward one that lies outside it, confirmation runs for high-Cook's-D points,
   center/axial points if curvature was untested or underpowered, extending a
   factor's range if the best setting sits at its tested boundary, or resolving a
   high-VIF confound. Never invent a recommendation the diagnostics don't support.

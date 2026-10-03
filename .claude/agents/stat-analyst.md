@@ -68,6 +68,10 @@ one-off script for what these already compute deterministically):
   extrapolates to an untested/interior point), and flags whether the best
   setting sits at a factor's tested boundary (a real optimum may lie beyond the
   tested range).
+- `stationary-point --formula "..." --factor F1 --factor F2` — for a quadratic
+  model: whether the surface has a maximum, minimum or saddle, where (with
+  CIs), and whether that point is inside the tested region. Run it whenever the
+  model has a squared term for every factor.
 
 ## Your job each round
 

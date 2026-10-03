@@ -16,6 +16,8 @@ Engine output                Trigger                             Proposal
 ``vif``                      ``collinearity_concern``             break the confound
 ``predict``                  ``influential`` rows                 confirmation runs
 ``regression``               noise SD measured                    carry it into power
+``stationary-point``         max/min outside the tested range     widen toward it
+``stationary-point``         max/min inside the tested range      confirmation run there
 ===========================  ==================================  =========================
 
 It returns a **form dict**, not a :class:`~doe_advisor.designs.spec.DesignSpec`,
@@ -96,7 +98,7 @@ def measured_noise(fit: dict | None) -> dict | None:
 
 def findings(coverage: dict | None = None, optimum: dict | None = None,
              vif: dict | None = None, predict: dict | None = None,
-             fit: dict | None = None) -> list[dict]:
+             fit: dict | None = None, stationary: dict | None = None) -> list[dict]:
     """The diagnostic triggers that fired, each with the evidence behind it.
 
     Returned separately from :func:`form_from_diagnostics` so a caller can show
@@ -185,6 +187,33 @@ def findings(coverage: dict | None = None, optimum: dict | None = None,
                 "action": "confirmation_runs",
             })
 
+    if stationary and stationary.get("kind") in ("maximum", "minimum"):
+        location = stationary.get("location") or {}
+        beyond = {f: v for f, v in location.items() if not v.get("inside_tested_range")}
+        if beyond:
+            sides = {f: ("low" if v["value"] < v["tested_range"][0] else "high") for f, v in beyond.items()}
+            out.append({
+                "trigger": "stationary_point_outside",
+                "source": "stationary-point",
+                "factors": list(beyond),
+                "sides": sides,
+                "detail": f"The fitted {stationary['kind']} lies outside the tested range for "
+                          f"{', '.join(beyond)}. The model cannot vouch for it there; the next design "
+                          f"should move toward it.",
+                "action": "extend_range",
+            })
+        else:
+            point = {f: v.get("value") for f, v in location.items()}
+            out.append({
+                "trigger": "stationary_point_inside",
+                "source": "stationary-point",
+                "point": point,
+                "detail": f"The fitted {stationary['kind']} lies inside the tested region, at "
+                          + ", ".join(f"{f} = {v:.4g}" for f, v in point.items())
+                          + ". Confirmation runs there test the model directly.",
+                "action": "confirmation_runs",
+            })
+
     noise = measured_noise(fit)
     if noise:
         out.append({
@@ -202,7 +231,7 @@ def findings(coverage: dict | None = None, optimum: dict | None = None,
 
 def form_from_diagnostics(coverage: dict | None = None, optimum: dict | None = None,
                           vif: dict | None = None, predict: dict | None = None,
-                          fit: dict | None = None,
+                          fit: dict | None = None, stationary: dict | None = None,
                           *, factor_units: dict[str, str] | None = None,
                           response: dict | None = None,
                           max_runs: int | None = None) -> dict:
@@ -225,11 +254,14 @@ def form_from_diagnostics(coverage: dict | None = None, optimum: dict | None = N
     if not coverage or not coverage.get("levels"):
         raise ValueError("design-coverage output is required: it carries the tested factor levels")
 
-    fired = findings(coverage, optimum, vif, predict, fit)
+    fired = findings(coverage, optimum, vif, predict, fit, stationary)
     actions = {f["action"] for f in fired}
     units = factor_units or {}
     best = (optimum or {}).get("best") or {}
     at_edge = set(next((f["factors"] for f in fired if f["trigger"] == "optimum_at_boundary"), []))
+    # The stationary point, when it lies outside, says which way to go more
+    # directly than a boundary hit does, so it wins where both fire.
+    toward = next((f["sides"] for f in fired if f["trigger"] == "stationary_point_outside"), {})
 
     factors: list[dict] = []
     skipped: list[str] = []
@@ -239,7 +271,9 @@ def form_from_diagnostics(coverage: dict | None = None, optimum: dict | None = N
             skipped.append(name)
             continue
         low, high = levels[0], levels[-1]
-        if name in at_edge:
+        if name in toward:
+            low, high = _widen(low, high, toward[name])
+        elif name in at_edge:
             low, high = _widen(low, high, _boundary_side(name, best, levels))
         factors.append({"name": name, "low": low, "high": high, "units": units.get(name, "")})
 
