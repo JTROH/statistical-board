@@ -221,10 +221,11 @@ function prosAndCons(option, cheapest, dearest, basis) {
         cons.push(`Smallest change it can reliably see: about ${seen}${u}. Your ${basis.target_effect}${u} is smaller than that, so it will often go unnoticed.`);
       }
     }
-    if (option.power_if_noise_1_5x != null && option.power >= 0.8) {
-      const worse = Math.round(option.power_if_noise_1_5x * 100);
-      if (worse < 80) cons.push(`Sensitive to your noise guess: if the real SD is 1.5× what you entered, power falls to ${worse}%.`);
-      else pros.push(`Forgiving of a bad noise guess: even at 1.5× the SD you entered, power stays at ${worse}%.`);
+    if (option.power_if_noise_high != null && option.power >= 0.8) {
+      const worse = Math.round(option.power_if_noise_high * 100);
+      const k = Number(option.noise_stress_factor || 1.5).toPrecision(3).replace(/\.?0+$/, "");
+      if (worse < 80) cons.push(`Sensitive to your noise estimate: if the real SD is ${k}× what you entered, power falls to ${worse}%.`);
+      else pros.push(`Forgiving of a bad noise estimate: even at ${k}× the SD you entered, power stays at ${worse}%.`);
     }
   } else if (option.detectable_effect_sd != null) {
     const inUnits = option.detectable_effect_units != null ? ` — about ${sig(option.detectable_effect_units)}${u}` : "";
@@ -275,8 +276,9 @@ function renderPowerBasis(basis) {
   let runs = "";
   if (basis.runs_for_80_power != null) {
     runs = ` An ideal two-level design reaches 80% power with about ${basis.runs_for_80_power} runs`;
-    if (basis.runs_for_80_power_if_noise_1_5x != null) {
-      runs += `, or about ${basis.runs_for_80_power_if_noise_1_5x} if the noise is really 1.5× larger`;
+    if (basis.runs_for_80_power_if_noise_high != null) {
+      const k = Number(basis.noise_stress_factor || 1.5).toPrecision(3).replace(/\.?0+$/, "");
+      runs += `, or about ${basis.runs_for_80_power_if_noise_high} if the noise is really ${k}× larger`;
     }
     runs += " — see the first chart below.";
   } else {

@@ -20,7 +20,7 @@ import numpy as np
 
 from . import __version__, figures
 from .candidates import AXIS_WEIGHTS, DEFAULT_MIN_POWER, ScoredDesign, top_options
-from .designs.properties import CURVATURE_RULE, PowerCurve, power_curve
+from .designs.properties import CURVATURE_RULE, NOISE_UPPER_CONFIDENCE, PowerCurve, noise_stress_factor, power_curve
 from .designs.spec import DesignSpec
 from .narrate import Narration, get_narrator
 
@@ -129,6 +129,11 @@ def _comparison_table(options: list[ScoredDesign]) -> str:
     return "\n".join(["## The options", "", header, *rows, "", footnote, ""])
 
 
+def _stress(response) -> str:
+    """The noise stress factor as printed, e.g. ``1.5`` or ``1.73``."""
+    return f"{noise_stress_factor(response):.3g}"
+
+
 def _power_primer(
     spec: DesignSpec, options: list[ScoredDesign], curve: PowerCurve | None, with_figure: bool
 ) -> str:
@@ -163,7 +168,7 @@ def _power_primer(
         "small for your question.",
         "",
         "| Option | Runs | Smallest change seen at 80% power | Main effects | Interactions | Curvature "
-        "| Weakest term | Weakest if noise is 1.5× |",
+        f"| Weakest term | Weakest if noise is {_stress(response)}× |",
         "|---|---|---|---|---|---|---|---|",
     ]
 
@@ -176,16 +181,22 @@ def _power_primer(
         lines.append(
             f"| {option.design.name} | {option.n_runs} | {seen} | {pct(pw.min_main_effect_power)} | "
             f"{pct(pw.min_interaction_power)} | {pct(pw.min_curvature_power)} | {pct(pw.min_power)} | "
-            f"{pct(pw.min_power_if_noise_1_5x)} |"
+            f"{pct(pw.min_power_if_noise_high)} |"
         )
     lines += [
         "",
         "*Power is shown for every kind of term in the model; the score uses the weakest. "
         f"{CURVATURE_RULE} A blank (—) means the model has no terms of that kind.*",
         "",
-        "*The last column is the cost of guessing the noise too low. A noise SD taken from two or three "
-        "repeats is easily off by half; one from centre points of a past study, or from many batches at the "
-        "same set-point, is much safer.*",
+        (
+            f"*The last column is the cost of the noise being worse than measured. Your noise SD comes from "
+            f"{response.noise_df} degrees of freedom, so its {NOISE_UPPER_CONFIDENCE:.0%} upper confidence bound "
+            f"is {_stress(response)}× the value entered; that is the stress used.*"
+            if response.noise_df
+            else "*The last column is the cost of guessing the noise too low. A noise SD taken from two or three "
+            "repeats is easily off by half; one from centre points of a past study, or from many batches at the "
+            "same set-point, is much safer.*"
+        ),
         "",
     ]
     if curve is not None:
@@ -194,8 +205,11 @@ def _power_primer(
                 f"**How many runs it takes.** An ideal two-level design reaches 80% power at your target "
                 f"effect with about **{curve.runs_for_80} runs**"
             )
-            if curve.runs_for_80_if_noise_1_5x is not None:
-                need += f", or about **{curve.runs_for_80_if_noise_1_5x}** if the noise is really 1.5× larger"
+            if curve.runs_for_80_if_noise_high is not None:
+                need += (
+                    f", or about **{curve.runs_for_80_if_noise_high}** if the noise is really "
+                    f"{curve.noise_stress_factor:.2g}× larger"
+                )
             need += (
                 ". Real designs sit on or below that curve: centre points and replicates add runs without "
                 "adding power to a main effect."

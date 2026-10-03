@@ -184,7 +184,7 @@ def power_curve_chart(curve: PowerCurve, options: list[ScoredDesign], spec: Desi
     The line is the best case — an ideal orthogonal design — so an option below
     the line is spending runs on something other than power (centre points,
     replicates), which is often deliberate. The dashed line is the same curve if
-    the noise guess is 1.5x too low: the gap between them is the price of being
+    the noise is worse than entered (the stress factor): the gap between them is the price of being
     wrong about the SD.
     """
     path = Path(path)
@@ -196,11 +196,11 @@ def power_curve_chart(curve: PowerCurve, options: list[ScoredDesign], spec: Desi
     ax.plot(curve.n_runs, curve.power, color=TEAL, linewidth=2, label=label)
     ax.plot(
         curve.n_runs,
-        curve.power_if_noise_1_5x,
+        curve.power_if_noise_high,
         color=TEAL,
         linewidth=1.4,
         linestyle="--",
-        label="same, if the noise SD is really 1.5x larger",
+        label=f"same, if the noise SD is really {curve.noise_stress_factor:.2g}x larger",
     )
     ax.axhline(0.8, color=GREY, linestyle=":", linewidth=1.2)
     ax.text(curve.n_runs[0], 0.815, "80% power", fontsize=8, color=GREY, va="bottom")

@@ -133,3 +133,42 @@ def test_proposed_form_is_accepted_by_intake_and_yields_a_curvature_design(diagn
     # plain two-level factorial.
     families = {o.design.family for o in options}
     assert families & {"central_composite", "box_behnken"}
+
+
+# ---- measured noise carried into the next design ---- #
+
+def test_measured_noise_prefers_pure_error(curved_csv):
+    fit = analyses.regression(curved_csv, FORMULA)
+    noise = augment.measured_noise(fit)
+    assert noise["source"] == "pure error"
+    assert noise["sd"] == pytest.approx(fit["lack_of_fit"]["pure_error_sd"])
+    assert noise["df"] == fit["lack_of_fit"]["df_pure_error"] == 6  # 4 corner pairs + 3 centres
+
+
+def test_measured_noise_falls_back_to_the_residual(tmp_path):
+    p = tmp_path / "unreplicated.csv"
+    p.write_text("x1,x2,y\n-1,-1,10\n1,-1,14\n-1,1,16\n1,1,21\n0,0,15\n", encoding="utf-8")
+    fit = analyses.regression(str(p), "y ~ x1 + x2")
+    noise = augment.measured_noise(fit)
+    assert noise["source"] == "model residual"
+    assert noise["df"] == fit["residual_df"] == 2
+
+
+def test_blank_noise_is_filled_from_the_fit_and_flows_into_power(diagnostics, curved_csv):
+    fit = analyses.regression(curved_csv, FORMULA)
+    out = augment.form_from_diagnostics(
+        **diagnostics, fit=fit, response={"name": "y", "target_effect": 2.0, "goal": "maximize"}
+    )
+    response = out["form"]["responses"][0]
+    assert response["noise_sd"] == pytest.approx(fit["lack_of_fit"]["pure_error_sd"])
+    assert response["noise_df"] == 6
+    assert any(f["trigger"] == "noise_measured" for f in out["findings"])
+    spec = spec_from_dict(out["form"])
+    assert spec.primary_response.noise_df == 6
+
+
+def test_entered_noise_is_kept(diagnostics, curved_csv):
+    fit = analyses.regression(curved_csv, FORMULA)
+    out = augment.form_from_diagnostics(**diagnostics, fit=fit, response={"name": "y", "noise_sd": 5.0})
+    assert out["form"]["responses"][0]["noise_sd"] == 5.0
+    assert "noise_df" not in out["form"]["responses"][0]

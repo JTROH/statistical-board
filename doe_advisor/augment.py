@@ -15,6 +15,7 @@ Engine output                Trigger                             Proposal
 ``design-coverage``          ``low_power_warning``                more centre points
 ``vif``                      ``collinearity_concern``             break the confound
 ``predict``                  ``influential`` rows                 confirmation runs
+``regression``               noise SD measured                    carry it into power
 ===========================  ==================================  =========================
 
 It returns a **form dict**, not a :class:`~doe_advisor.designs.spec.DesignSpec`,
@@ -75,8 +76,27 @@ def _boundary_side(factor: str, best: dict, levels: list[float]) -> str:
     return "high"
 
 
+def measured_noise(fit: dict | None) -> dict | None:
+    """The run-to-run noise a previous fit measured, with its degrees of freedom.
+
+    Pure error (scatter between true replicates, from the ``lack_of_fit``
+    block) is preferred: it does not depend on the model being right. The
+    model's residual SD is the fallback, and is labelled as such, because it
+    also absorbs any lack of fit.
+    """
+    if not fit:
+        return None
+    lof = fit.get("lack_of_fit") or {}
+    if lof.get("pure_error_sd") and lof.get("df_pure_error"):
+        return {"sd": float(lof["pure_error_sd"]), "df": int(lof["df_pure_error"]), "source": "pure error"}
+    if fit.get("residual_sd") and fit.get("residual_df"):
+        return {"sd": float(fit["residual_sd"]), "df": int(fit["residual_df"]), "source": "model residual"}
+    return None
+
+
 def findings(coverage: dict | None = None, optimum: dict | None = None,
-             vif: dict | None = None, predict: dict | None = None) -> list[dict]:
+             vif: dict | None = None, predict: dict | None = None,
+             fit: dict | None = None) -> list[dict]:
     """The diagnostic triggers that fired, each with the evidence behind it.
 
     Returned separately from :func:`form_from_diagnostics` so a caller can show
@@ -165,11 +185,24 @@ def findings(coverage: dict | None = None, optimum: dict | None = None,
                 "action": "confirmation_runs",
             })
 
+    noise = measured_noise(fit)
+    if noise:
+        out.append({
+            "trigger": "noise_measured",
+            "source": "regression",
+            "noise": noise,
+            "detail": f"The previous study measured the run-to-run noise: SD {noise['sd']:.4g} from "
+                      f"{noise['df']} degree(s) of freedom ({noise['source']}). It is in the units the "
+                      f"model was fitted in -- if that was a log scale, the next design must be too.",
+            "action": "set_noise",
+        })
+
     return out
 
 
 def form_from_diagnostics(coverage: dict | None = None, optimum: dict | None = None,
                           vif: dict | None = None, predict: dict | None = None,
+                          fit: dict | None = None,
                           *, factor_units: dict[str, str] | None = None,
                           response: dict | None = None,
                           max_runs: int | None = None) -> dict:
@@ -182,11 +215,17 @@ def form_from_diagnostics(coverage: dict | None = None, optimum: dict | None = N
 
     ``response`` is an optional ``{"name", "units", "target_effect", "noise_sd",
     "goal"}`` dict carried over from the previous study.
+
+    ``fit`` is the previous study's ``regression`` output. When given, its
+    measured noise replaces a ``noise_sd`` the scientist left blank, and its
+    degrees of freedom go along with it so the power stress test can use a real
+    confidence bound instead of a guess. A ``noise_sd`` the scientist did enter
+    is kept; the measured value is still reported in the findings.
     """
     if not coverage or not coverage.get("levels"):
         raise ValueError("design-coverage output is required: it carries the tested factor levels")
 
-    fired = findings(coverage, optimum, vif, predict)
+    fired = findings(coverage, optimum, vif, predict, fit)
     actions = {f["action"] for f in fired}
     units = factor_units or {}
     best = (optimum or {}).get("best") or {}
@@ -211,6 +250,10 @@ def form_from_diagnostics(coverage: dict | None = None, optimum: dict | None = N
     n_center = 3
     if "more_center_points" in actions:
         n_center = max(n_center, 2 * int(coverage.get("n_center_points") or 1) + 1)
+
+    noise = measured_noise(fit)
+    if response is not None and noise is not None and response.get("noise_sd") in (None, ""):
+        response = {**response, "noise_sd": noise["sd"], "noise_df": noise["df"]}
 
     form: dict[str, Any] = {
         "factors": factors,

@@ -26,6 +26,13 @@ from .alias import AliasReport, alias_report
 from .model import is_estimable, model_matrix, model_terms, residual_df, term_label
 from .spec import Design, DesignSpec
 
+# The "what if the noise is worse than you said" check. With a guessed noise SD
+# the tool uses a flat 1.5x. With a measured one it uses the upper confidence
+# bound of that SD given its degrees of freedom — about 1.5x at 8 df, about 1.7x
+# at 3 df — so the stress test reflects how much the estimate can be trusted.
+DEFAULT_NOISE_STRESS = 1.5
+NOISE_UPPER_CONFIDENCE = 0.80
+
 # Points used to characterise prediction variance across the design space.
 FDS_SAMPLE_SIZE = 2048
 # Cap on how many run-loss scenarios we enumerate before switching to sampling.
@@ -116,6 +123,14 @@ def extreme_point_sample(n_factors: int, n_points: int = FDS_SAMPLE_SIZE, seed: 
 # --------------------------------------------------------------------------
 
 
+def noise_stress_factor(response) -> float:
+    """How much larger than entered the noise SD is assumed in the stress test."""
+    df = getattr(response, "noise_df", None) if response is not None else None
+    if not df or df <= 0:
+        return DEFAULT_NOISE_STRESS
+    return float(np.sqrt(df / stats.chi2.ppf(1.0 - NOISE_UPPER_CONFIDENCE, df)))
+
+
 def _power_for_ncp(ncp: float, df: int, alpha: float) -> float:
     """Two-sided t-test power from a non-centrality parameter."""
     if df <= 0:
@@ -193,10 +208,11 @@ class PowerReport:
     detectable_effect_sd: float | None = None
     # The same figure in the response's own units — only when a noise SD was given.
     detectable_effect_units: float | None = None
-    # Power for the weakest model term if the true noise SD is 1.5x what was
-    # entered. A noise guess is the input scientists are least sure of, and this
-    # is what it costs to be wrong by half.
-    min_power_if_noise_1_5x: float | None = None
+    # Power for the weakest model term if the true noise SD is
+    # ``noise_stress_factor`` times what was entered. The noise SD is the input
+    # scientists are least sure of, and this is what it costs to be wrong.
+    min_power_if_noise_high: float | None = None
+    noise_stress_factor: float = DEFAULT_NOISE_STRESS
 
     @staticmethod
     def _min(values: dict[str, float]) -> float | None:
@@ -234,9 +250,10 @@ class PowerCurve:
 
     n_runs: list[int] = field(default_factory=list)
     power: list[float] = field(default_factory=list)
-    power_if_noise_1_5x: list[float] = field(default_factory=list)
+    power_if_noise_high: list[float] = field(default_factory=list)
     runs_for_80: int | None = None  # smallest run count reaching 80% power
-    runs_for_80_if_noise_1_5x: int | None = None
+    runs_for_80_if_noise_high: int | None = None
+    noise_stress_factor: float = DEFAULT_NOISE_STRESS
 
 
 # Beyond this many runs the search for 80% power gives up; the answer is
@@ -266,11 +283,12 @@ def power_curve(spec: DesignSpec, up_to: int, target: float = 0.80) -> PowerCurv
 
     n_terms = len(model_terms(spec.n_factors, spec.model_order))
     start = n_terms + 2  # at least two residual df, or the t-test is meaningless
-    curve = PowerCurve()
+    stress = noise_stress_factor(response)
+    curve = PowerCurve(noise_stress_factor=stress)
     for n in range(start, max(up_to, start) + 1):
         curve.n_runs.append(n)
         curve.power.append(_ideal_power(std_effect, n, n_terms, spec.alpha))
-        curve.power_if_noise_1_5x.append(_ideal_power(std_effect / 1.5, n, n_terms, spec.alpha))
+        curve.power_if_noise_high.append(_ideal_power(std_effect / stress, n, n_terms, spec.alpha))
 
     def first_reaching(effect: float) -> int | None:
         for n in range(start, POWER_CURVE_SEARCH_CAP + 1):
@@ -279,7 +297,7 @@ def power_curve(spec: DesignSpec, up_to: int, target: float = 0.80) -> PowerCurv
         return None
 
     curve.runs_for_80 = first_reaching(std_effect)
-    curve.runs_for_80_if_noise_1_5x = first_reaching(std_effect / 1.5)
+    curve.runs_for_80_if_noise_high = first_reaching(std_effect / stress)
     return curve
 
 
@@ -309,7 +327,8 @@ def power_report(design: Design, spec: DesignSpec) -> PowerReport:
     """
     terms = model_terms(design.n_factors, spec.model_order)
     df = residual_df(design.matrix, terms)
-    report = PowerReport(residual_df=df, saturated=df <= 0)
+    response = spec.primary_response
+    report = PowerReport(residual_df=df, saturated=df <= 0, noise_stress_factor=noise_stress_factor(response))
 
     if not is_estimable(design.matrix, terms) or df <= 0:
         return report
@@ -317,7 +336,6 @@ def power_report(design: Design, spec: DesignSpec) -> PowerReport:
     x = model_matrix(design.matrix, terms)
     inv = np.linalg.inv(x.T @ x)
 
-    response = spec.primary_response
     std_effect = response.standardised_effect if response else None
     report.standardised_effect = std_effect
 
@@ -343,8 +361,8 @@ def power_report(design: Design, spec: DesignSpec) -> PowerReport:
             ncp = std_effect * _coefficient_per_target(term) / float(np.sqrt(inv[j, j]))
             label = term_label(term, spec.factor_names)
             buckets[term_kind(term)][label] = _power_for_ncp(ncp, df, spec.alpha)
-            pessimistic.append(_power_for_ncp(ncp / 1.5, df, spec.alpha))
-        report.min_power_if_noise_1_5x = min(pessimistic)
+            pessimistic.append(_power_for_ncp(ncp / report.noise_stress_factor, df, spec.alpha))
+        report.min_power_if_noise_high = min(pessimistic)
 
     return report
 

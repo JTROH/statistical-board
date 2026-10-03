@@ -141,7 +141,9 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
                 "noise_sd": response.noise_sd,
                 "standardised_effect": response.standardised_effect,
                 "runs_for_80_power": None if curve is None else curve.runs_for_80,
-                "runs_for_80_power_if_noise_1_5x": None if curve is None else curve.runs_for_80_if_noise_1_5x,
+                "runs_for_80_power_if_noise_high": None if curve is None else curve.runs_for_80_if_noise_high,
+            "noise_df": response.noise_df,
+            "noise_stress_factor": None if curve is None else round(curve.noise_stress_factor, 4),
             },
         }
     if cmd == "candidates":

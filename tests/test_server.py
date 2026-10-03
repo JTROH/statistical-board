@@ -183,7 +183,7 @@ def test_design_returns_the_power_basis_and_unit_level_figures(client):
     assert basis["goal"] == "screen"
     for option in data["options"]:
         assert option["detectable_effect_units"] > 0
-        assert 0 <= option["power_if_noise_1_5x"] <= option["power"]
+        assert 0 <= option["power_if_noise_high"] <= option["power"]
     assert basis["runs_for_80_power"] > 0
     assert data["charts"]["power"].startswith("data:image/png;base64,")
 

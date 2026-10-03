@@ -36,9 +36,10 @@ def serialise_option(option) -> dict:
         },
         "detectable_effect_sd": props.power.detectable_effect_sd,
         "detectable_effect_units": props.power.detectable_effect_units,
-        "power_if_noise_1_5x": (
-            None if props.power.min_power_if_noise_1_5x is None else round(props.power.min_power_if_noise_1_5x, 4)
+        "power_if_noise_high": (
+            None if props.power.min_power_if_noise_high is None else round(props.power.min_power_if_noise_high, 4)
         ),
+        "noise_stress_factor": round(props.power.noise_stress_factor, 4),
         "worst_alias": round(props.aliasing.worst_main_effect_alias, 4),
         "alias_statements": props.aliasing.statements(limit=4),
         "i_value": props.prediction.i_value if props.prediction.i_value != float("inf") else None,

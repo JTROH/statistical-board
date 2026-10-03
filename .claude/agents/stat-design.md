@@ -29,10 +29,13 @@ Every command prints one JSON object. Read the numbers out of it.
 
 ## Your role: attack the four axes, plus the spec itself
 
-- **Power.** Is `power` (the weakest main effect) below 0.80? Ask what the study
-  could realistically detect, not what it hopes to. Check `power_if_noise_1_5x`
-  too — an assumed noise level is a guess, and a design that collapses when the
-  process is half again as variable as hoped is a design built on optimism. If
+- **Power.** Is `power` (the weakest model term) below 0.80? Read
+  `power_by_kind` — for an optimisation study the curvature and interaction
+  terms matter as much as the main effects. Ask what the study could
+  realistically detect, not what it hopes to. Check `power_if_noise_high` too,
+  at `noise_stress_factor` (1.5 for a guessed noise SD, the 80% upper bound for
+  a measured one), and `worst_power_after_loss` — "still estimable after losing
+  a run" is not "still powered". If
   `runs_for_80_power` in the `options` output exceeds the budget, say so plainly:
   the study as specified cannot answer its own question.
 - **Aliasing / confounding.** Read `worst_alias` and `alias_statements`. State in

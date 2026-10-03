@@ -114,6 +114,9 @@ def spec_from_dict(payload: dict) -> DesignSpec:
         noise = _number(item.get("noise_sd"), f"noise SD for {name}", allow_none=True)
         if noise is not None and noise <= 0:
             raise IntakeError(f"{name}: the run-to-run standard deviation must be greater than zero.")
+        noise_df = _number(item.get("noise_df"), f"noise degrees of freedom for {name}", allow_none=True)
+        if noise_df is not None and noise_df < 1:
+            raise IntakeError(f"{name}: the noise degrees of freedom must be at least 1.")
         goal_value = str(item.get("goal") or "screen").strip().lower()
         try:
             goal = ResponseGoal(goal_value)
@@ -127,6 +130,7 @@ def spec_from_dict(payload: dict) -> DesignSpec:
                 units=str(item.get("units") or "").strip(),
                 target_effect=target,
                 noise_sd=noise,
+                noise_df=None if noise_df is None or noise is None else int(noise_df),
                 goal=goal,
                 target_value=target_value if goal is ResponseGoal.TARGET else None,
             )
@@ -175,6 +179,7 @@ def spec_to_dict(spec: DesignSpec) -> dict:
                 "target_value": r.target_value,
                 "target_effect": r.target_effect,
                 "noise_sd": r.noise_sd,
+                "noise_df": r.noise_df,
             }
             for r in spec.responses
         ],

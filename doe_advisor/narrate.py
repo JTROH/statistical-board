@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 
 from .candidates import DEFAULT_MIN_POWER, ScoredDesign
+from .designs.properties import noise_stress_factor
 from .designs.spec import DesignSpec, ModelOrder
 
 DEFAULT_MODEL = os.environ.get("DOE_ADVISOR_MODEL", "claude-sonnet-5")
@@ -92,9 +93,10 @@ def option_facts(option: ScoredDesign, spec: DesignSpec, cheapest: int, dearest:
         "detectable_effect_units": (
             None if props.power.detectable_effect_units is None else _sig(props.power.detectable_effect_units)
         ),
-        "min_power_pct_if_noise_1_5x": (
-            None if props.power.min_power_if_noise_1_5x is None else round(props.power.min_power_if_noise_1_5x * 100)
+        "min_power_pct_if_noise_high": (
+            None if props.power.min_power_if_noise_high is None else round(props.power.min_power_if_noise_high * 100)
         ),
+        "noise_stress_factor": round(props.power.noise_stress_factor, 2),
         "response_units": spec.primary_response.units if spec.primary_response else "",
         "target_effect": spec.primary_response.target_effect if spec.primary_response else None,
         "is_cheapest": props.n_runs == cheapest,
@@ -230,16 +232,18 @@ class TemplateNarrator:
                         f"The smallest change it can reliably see (at 80% power) is about {seen}{units}; "
                         f"the {asked}{units} you asked for is smaller than that, so it will often go unnoticed."
                     )
-            if f["min_power_pct_if_noise_1_5x"] is not None and pct >= DEFAULT_MIN_POWER * 100:
-                worse = f["min_power_pct_if_noise_1_5x"]
+            if f["min_power_pct_if_noise_high"] is not None and pct >= DEFAULT_MIN_POWER * 100:
+                worse = f["min_power_pct_if_noise_high"]
                 if worse < DEFAULT_MIN_POWER * 100:
                     cons.append(
-                        f"Sensitive to your noise estimate: if the real run-to-run SD is 1.5 times what you "
+                        f"Sensitive to your noise estimate: if the real run-to-run SD is "
+                        f"{f['noise_stress_factor']} times what you "
                         f"entered, power falls to about {worse}%."
                     )
                 else:
                     pros.append(
-                        f"Forgiving of a bad noise estimate: even if the real run-to-run SD is 1.5 times "
+                        f"Forgiving of a bad noise estimate: even if the real run-to-run SD is "
+                        f"{f['noise_stress_factor']} times "
                         f"what you entered, power stays at about {worse}%."
                     )
         elif f["detectable_effect_sd"] is not None:
@@ -352,7 +356,7 @@ def _caveats(spec: DesignSpec, options: list[ScoredDesign]) -> list[str]:
             f"effect of {response.target_effect}{units} — a signal {response.standardised_effect:.2f} times "
             f"the size of the noise. The noise figure is the one to be sure of: if the real variability is "
             f"larger than you entered, every power figure here is optimistic, and each option shows how "
-            f"much it would lose if the noise were 1.5 times larger."
+            f"much it would lose if the noise were {round(noise_stress_factor(response), 2)} times larger."
         )
 
     if response is not None and response.goal.wants_optimum and spec.model_order is not ModelOrder.QUADRATIC:

@@ -442,6 +442,7 @@ def _fit_and_anova(path: str, formula: str, *, typ: int = 2, alpha: float = 0.05
         "formula": formula, "typ": typ, "n": int(model.nobs),
         "r_squared": float(model.rsquared), "adj_r_squared": float(model.rsquared_adj),
         "f_pvalue": float(model.f_pvalue), "aic": float(model.aic), "bic": float(model.bic),
+        "residual_sd": float(np.sqrt(model.scale)), "residual_df": int(model.df_resid),
         "anova": terms, "coefficients": coefs, "residual_diagnostics": diagnostics,
         "lack_of_fit": _lack_of_fit(model, alpha),
     }

@@ -112,6 +112,9 @@ class Response:
     units: str = ""
     target_effect: float | None = None  # smallest change worth detecting
     noise_sd: float | None = None  # run-to-run standard deviation
+    # Degrees of freedom behind ``noise_sd`` when it was measured (e.g. the
+    # pure-error df of a previous study). None means it is a guess.
+    noise_df: int | None = None
     goal: ResponseGoal = ResponseGoal.SCREEN
     target_value: float | None = None  # only meaningful when goal is TARGET
 

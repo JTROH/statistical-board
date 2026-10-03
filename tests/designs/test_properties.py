@@ -96,10 +96,10 @@ def test_detectable_effect_and_power_agree_on_which_side_of_80_percent():
 
 def test_power_with_larger_noise_is_lower():
     report = power_report(C.full_factorial(4, n_center=3), make_spec())
-    assert report.min_power_if_noise_1_5x < report.min_main_effect_power
+    assert report.min_power_if_noise_high < report.min_main_effect_power
     # and it equals power at the same target with the SD actually 1.5x larger
     worse = power_report(C.full_factorial(4, n_center=3), make_spec(noise=0.25 * 1.5))
-    assert report.min_power_if_noise_1_5x == pytest.approx(worse.min_main_effect_power)
+    assert report.min_power_if_noise_high == pytest.approx(worse.min_main_effect_power)
 
 
 def test_power_curve_matches_a_real_orthogonal_design():
@@ -117,7 +117,7 @@ def test_power_curve_rises_with_runs_and_reports_the_80_percent_crossing():
     assert curve.runs_for_80 in curve.n_runs
     assert curve.power[curve.n_runs.index(curve.runs_for_80)] >= 0.80
     assert curve.power[curve.n_runs.index(curve.runs_for_80) - 1] < 0.80
-    assert curve.runs_for_80_if_noise_1_5x > curve.runs_for_80
+    assert curve.runs_for_80_if_noise_high > curve.runs_for_80
 
 
 def test_power_curve_needs_a_target_effect_and_noise():
@@ -424,3 +424,35 @@ def test_robustness_reports_power_after_losing_a_run():
 def test_robustness_power_after_loss_is_none_without_a_target_effect():
     spec = make_spec(k=3, target=None, losses=1)
     assert robustness_report(C.full_factorial(3, n_center=3), spec).worst_power_after_loss is None
+
+
+# --------------------------------------------------------------------------
+# Noise stress: a guess gets 1.5x, a measurement gets its confidence bound
+# --------------------------------------------------------------------------
+
+
+def test_guessed_noise_is_stressed_by_1_5():
+    from doe_advisor.designs.properties import noise_stress_factor
+
+    assert noise_stress_factor(Response("y", noise_sd=1.0)) == 1.5
+    assert noise_stress_factor(None) == 1.5
+
+
+@pytest.mark.parametrize("df", [2, 3, 8, 30])
+def test_measured_noise_is_stressed_by_its_upper_80_percent_bound(df):
+    """Upper one-sided 80% bound of sigma from s with df: s * sqrt(df / chi2_0.20(df))."""
+    from doe_advisor.designs.properties import noise_stress_factor
+
+    expected = np.sqrt(df / stats.chi2.ppf(0.20, df))
+    assert noise_stress_factor(Response("y", noise_sd=1.0, noise_df=df)) == pytest.approx(expected)
+
+
+def test_power_report_uses_the_measured_stress_factor():
+    design = C.full_factorial(3, n_center=3)
+    factors = [Factor(f"x{i}", -1.0, 1.0) for i in range(3)]
+    measured = DesignSpec(factors=factors, responses=[Response("y", target_effect=2.0, noise_sd=1.0, noise_df=3)])
+    report = power_report(design, measured)
+    k = report.noise_stress_factor
+    assert k == pytest.approx(np.sqrt(3 / stats.chi2.ppf(0.20, 3)))
+    worse = DesignSpec(factors=factors, responses=[Response("y", target_effect=2.0, noise_sd=k)])
+    assert report.min_power_if_noise_high == pytest.approx(power_report(design, worse).min_power)

@@ -62,7 +62,7 @@ returns 2–3 genuinely different options tagged **Cheaper / Recommended / More
 thorough**, scored on four axes — and **run count is deliberately not one of
 them**; it is the price, not a virtue.
 
-- **Power** — will it see the effect you care about, even at 1.5× the assumed noise?
+- **Power** — will it see the effect you care about, even if the noise is worse than assumed (1.5×, or the upper confidence bound when the noise was measured)?
 - **Aliasing** — what will it refuse to tell you apart?
 - **Prediction** — I/D/A/G efficiency and FDS: can this support a range claim later?
 - **Robustness** — if you lose two bioreactors, does the study still fit the model?
