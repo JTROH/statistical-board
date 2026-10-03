@@ -64,8 +64,30 @@ def term_label(term: Term, names: list[str]) -> str:
     return " x ".join(parts)
 
 
-def model_matrix(matrix: np.ndarray, terms: list[Term]) -> np.ndarray:
-    """Build X (n_runs, n_terms) from a coded run matrix."""
+def block_columns(blocks: np.ndarray | None) -> np.ndarray:
+    """Effect-coded block columns, (n_runs, b-1); empty when unblocked.
+
+    Effect (sum-to-zero) coding means a prediction with every block column at
+    zero is the average over blocks — which is what a prediction for "the
+    process", rather than for one particular day, should be.
+    """
+    if blocks is None:
+        return np.zeros((0, 0))
+    blocks = np.asarray(blocks, dtype=int)
+    b = int(blocks.max()) + 1
+    cols = np.zeros((blocks.size, b - 1), dtype=float)
+    for j in range(b - 1):
+        cols[blocks == j, j] = 1.0
+        cols[blocks == b - 1, j] = -1.0
+    return cols
+
+
+def model_matrix(matrix: np.ndarray, terms: list[Term], blocks: np.ndarray | None = None) -> np.ndarray:
+    """Build X (n_runs, n_terms [+ b-1]) from a coded run matrix.
+
+    Block columns, when given, go *after* the model terms, so a term's column
+    index is the same blocked or not.
+    """
     matrix = np.asarray(matrix, dtype=float)
     n_runs = matrix.shape[0]
     x = np.empty((n_runs, len(terms)), dtype=float)
@@ -74,37 +96,45 @@ def model_matrix(matrix: np.ndarray, terms: list[Term]) -> np.ndarray:
         for i in term:
             col = col * matrix[:, i]
         x[:, j] = col
+    if blocks is not None:
+        x = np.hstack([x, block_columns(blocks)])
     return x
 
 
-def is_estimable(matrix: np.ndarray, terms: list[Term], tol: float = 1e-8) -> bool:
+def n_block_params(blocks: np.ndarray | None) -> int:
+    return 0 if blocks is None else int(np.asarray(blocks).max())
+
+
+def is_estimable(matrix: np.ndarray, terms: list[Term], tol: float = 1e-8, blocks: np.ndarray | None = None) -> bool:
     """Can this design fit this model at all?
 
     False means the model is *singular* — there are not enough independent runs,
     so some coefficients cannot be separated even in principle. A design that
-    fails this is not "weak", it is unusable for the stated model.
+    fails this is not "weak", it is unusable for the stated model. With blocks,
+    a term confounded with a block counts as not estimable.
     """
-    if matrix.shape[0] < len(terms):
+    p = len(terms) + n_block_params(blocks)
+    if matrix.shape[0] < p:
         return False
-    x = model_matrix(matrix, terms)
-    return bool(np.linalg.matrix_rank(x, tol=tol) == len(terms))
+    x = model_matrix(matrix, terms, blocks)
+    return bool(np.linalg.matrix_rank(x, tol=tol) == p)
 
 
-def xtx_inv(matrix: np.ndarray, terms: list[Term]) -> np.ndarray:
+def xtx_inv(matrix: np.ndarray, terms: list[Term], blocks: np.ndarray | None = None) -> np.ndarray:
     """(X'X)^-1, the covariance structure of the coefficient estimates.
 
     Raises ``np.linalg.LinAlgError`` when the model is not estimable; callers
     are expected to gate on :func:`is_estimable` first.
     """
-    x = model_matrix(matrix, terms)
+    x = model_matrix(matrix, terms, blocks)
     return np.linalg.inv(x.T @ x)
 
 
-def residual_df(matrix: np.ndarray, terms: list[Term]) -> int:
+def residual_df(matrix: np.ndarray, terms: list[Term], blocks: np.ndarray | None = None) -> int:
     """Degrees of freedom left over to estimate noise with.
 
     Zero means the model is saturated: it will fit the data perfectly and tell
     you nothing about uncertainty. This is the trap behind "just run the
-    minimum number of runs".
+    minimum number of runs". Each extra block costs one.
     """
-    return int(matrix.shape[0] - len(terms))
+    return int(matrix.shape[0] - len(terms) - n_block_params(blocks))

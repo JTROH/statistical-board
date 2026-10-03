@@ -15,6 +15,8 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 TOL = 1e-9
 
@@ -110,6 +112,18 @@ def compare_power(ours: list[dict], theirs: list[dict], comparison: Comparison) 
                 comparison.check(case, f"power {kind}", float(a[kind]), float(b[kind]), tol=1e-6)
 
 
+def compare_blocking(ours: list[dict], theirs: list[dict], comparison: Comparison) -> None:
+    mine, reference = _index(ours), _index(theirs)
+    for case in sorted(set(mine) & set(reference)):
+        comparison.check(
+            case,
+            "block word lengths",
+            [float(v) for v in mine[case]["block_word_lengths"]],
+            # jsonlite unboxes a one-element vector to a scalar.
+            [float(v) for v in np.atleast_1d(reference[case]["block_word_lengths"])],
+        )
+
+
 def check_dsd(ours: list[dict], comparison: Comparison) -> None:
     """No R reference is installed, so check the published defining properties."""
     for entry in ours:
@@ -157,6 +171,7 @@ def main() -> int:
             ("Box-Behnken vs rsm::bbd", "box_behnken", compare_box_behnken),
             ("Central composite vs rsm::ccd", "central_composite", compare_central_composite),
             ("Power per term vs R (model.matrix + pt)", "power", compare_power),
+            ("Blocked factorials vs FrF2(blocks=)", "blocking", compare_blocking),
         ):
             comparison = Comparison()
             fn(ours.get(key, []), theirs.get(key, []), comparison)

@@ -166,6 +166,10 @@ class DesignSpec:
     # How many runs the scientist thinks could plausibly be lost (failed
     # bioreactors, contamination). Drives the robustness axis.
     expected_run_losses: int = 1
+    # Runs split into this many blocks (days, bioreactor batches, virus
+    # lots). Each block gets its own offset in the model, so a day-to-day
+    # shift cannot pose as a factor effect. 1 means no blocking.
+    n_blocks: int = 1
     # True when the declared ranges are limits, not just the region of
     # interest — e.g. a harvest window the process cannot go outside. Designs
     # with runs outside them (rotatable axial points) are then disqualified
@@ -207,11 +211,17 @@ class Design:
     matrix: np.ndarray
     factor_names: list[str]
     detail: dict = field(default_factory=dict)
+    # Block label (0..b-1) per run, or None for an unblocked design.
+    blocks: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.matrix = np.asarray(self.matrix, dtype=float)
         if self.matrix.ndim != 2:
             raise ValueError("design matrix must be 2-dimensional")
+        if self.blocks is not None:
+            self.blocks = np.asarray(self.blocks, dtype=int)
+            if self.blocks.shape != (self.matrix.shape[0],):
+                raise ValueError(f"design {self.name!r}: one block label per run is required")
         if self.matrix.shape[1] != len(self.factor_names):
             raise ValueError(
                 f"design {self.name!r}: matrix has {self.matrix.shape[1]} columns "
@@ -239,9 +249,18 @@ class Design:
             out[:, j] = factor.decode(self.matrix[:, j])
         return out
 
+    @property
+    def n_blocks(self) -> int:
+        return 1 if self.blocks is None else int(self.blocks.max()) + 1
+
     def randomised_order(self, seed: int | None = None) -> np.ndarray:
         """A run order to execute in. Randomisation is not cosmetic — it is what
         stops a drifting bioreactor or a warming incubator from masquerading as
-        a factor effect."""
+        a factor effect.
+
+        A blocked design is run block by block, randomised within each block:
+        a block is a day or a batch, so its runs must be done together."""
         rng = np.random.default_rng(seed)
-        return rng.permutation(self.n_runs)
+        if self.blocks is None:
+            return rng.permutation(self.n_runs)
+        return np.concatenate([rng.permutation(np.flatnonzero(self.blocks == b)) for b in range(self.n_blocks)])

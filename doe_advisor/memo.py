@@ -292,12 +292,16 @@ def _aliasing_section(options: list[ScoredDesign], spec: DesignSpec) -> str:
 
 
 def _run_sheet(option: ScoredDesign, spec: DesignSpec, seed: int = 0) -> str:
-    decoded = option.design.decoded(spec.factors)
-    order = option.design.randomised_order(seed=seed)
-    header = "| Run | " + " | ".join(f"{f.name}{f' ({f.units})' if f.units else ''}" for f in spec.factors) + " |"
-    divider = "|---" * (spec.n_factors + 1) + "|"
+    design = option.design
+    decoded = design.decoded(spec.factors)
+    order = design.randomised_order(seed=seed)
+    blocked = design.blocks is not None
+    names = " | ".join(f"{f.name}{f' ({f.units})' if f.units else ''}" for f in spec.factors)
+    header = f"| Run | {'Block | ' if blocked else ''}{names} |"
+    divider = "|---" * (spec.n_factors + 1 + blocked) + "|"
     rows = [
-        f"| {position + 1} | " + " | ".join(f"{decoded[run, j]:g}" for j in range(spec.n_factors)) + " |"
+        f"| {position + 1} | {f'{int(design.blocks[run]) + 1} | ' if blocked else ''}"
+        + " | ".join(f"{decoded[run, j]:g}" for j in range(spec.n_factors)) + " |"
         for position, run in enumerate(order)
     ]
     return "\n".join(
@@ -305,7 +309,13 @@ def _run_sheet(option: ScoredDesign, spec: DesignSpec, seed: int = 0) -> str:
             f"## Run sheet — {option.design.name}",
             "",
             "Execute in this order. The randomisation is not cosmetic: it is what stops a drifting "
-            "bioreactor or a warming incubator from masquerading as a factor effect.",
+            "bioreactor or a warming incubator from masquerading as a factor effect."
+            + (
+                f" Run the {design.n_blocks} blocks one after another, each as one day or batch; the order "
+                "is randomised within each block. Record the block number with the result."
+                if blocked
+                else ""
+            ),
             "",
             header,
             divider,

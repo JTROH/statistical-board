@@ -56,6 +56,10 @@ class AliasReport:
     estimable: bool
     n_model_terms: int
     n_potential_terms: int
+    # Potential (unmodelled) terms that the block effects absorb, e.g. the
+    # three-factor interaction in a 2^3 run in two blocks. Usually harmless and
+    # usually deliberate, but worth stating.
+    block_partners: list[str] = field(default_factory=list)
 
     @property
     def main_effect_entries(self) -> list[AliasEntry]:
@@ -120,12 +124,18 @@ def alias_report(design: Design, order: ModelOrder, factor_names: list[str] | No
     fitted = model_terms(design.n_factors, order)
     potential = potential_terms(design.n_factors, order)
 
-    if not is_estimable(design.matrix, fitted):
+    if not is_estimable(design.matrix, fitted, blocks=design.blocks):
         return AliasReport(entries=[], estimable=False, n_model_terms=len(fitted), n_potential_terms=len(potential))
 
-    x1 = model_matrix(design.matrix, fitted)
+    # Blocks sit in X1 alongside the model: they are fitted, so they cannot
+    # bias it, but they can absorb a potential term — reported separately.
+    x1 = model_matrix(design.matrix, fitted, design.blocks)
     x2 = model_matrix(design.matrix, potential) if potential else np.zeros((design.n_runs, 0))
-    a = np.linalg.solve(x1.T @ x1, x1.T @ x2) if potential else np.zeros((len(fitted), 0))
+    a = np.linalg.solve(x1.T @ x1, x1.T @ x2) if potential else np.zeros((x1.shape[1], 0))
+    block_partners = sorted(
+        {term_label(potential[j], names) for i in range(len(fitted), x1.shape[1]) for j in range(a.shape[1])
+         if abs(a[i, j]) > ALIAS_TOL}
+    )
 
     entries: list[AliasEntry] = []
     for i, term in enumerate(fitted):
@@ -143,4 +153,5 @@ def alias_report(design: Design, order: ModelOrder, factor_names: list[str] | No
         estimable=True,
         n_model_terms=len(fitted),
         n_potential_terms=len(potential),
+        block_partners=block_partners,
     )

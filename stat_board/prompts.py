@@ -55,6 +55,9 @@ Work the plan the judge gave you:
    e.g. `y ~ x + I(x**2) + x:z`) and identify the settings/region of highest
    predicted response — use `doe-optimum`, never a one-off script; it ranks every
    ACTUALLY TESTED combination and is independently reproducible by the verifier.
+   If the data has a `block` column (a blocked run sheet: days or batches), keep
+   `+ C(block)` in every model formula: it is a nuisance offset, fitted to remove
+   day-to-day shifts, never reported as a finding.
    For a quadratic model also run `stationary-point` (max/min/saddle, its location
    with CIs, and whether it is inside the tested region).
    ALSO run, for every multi-factor/DoE model: `predict` (per-row leverage/Cook's

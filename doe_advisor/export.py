@@ -60,7 +60,8 @@ def run_sheet_rows(design: Design, spec: DesignSpec, *, seed: int = 0) -> tuple[
     decoded = design.decoded(spec.factors)
     order = design.randomised_order(seed=seed)
 
-    header = ["run_order", "run_type"]
+    blocked = design.blocks is not None
+    header = ["run_order", "block", "run_type"] if blocked else ["run_order", "run_type"]
     for factor in spec.factors:
         header += [f"{_slug(factor.name)}_coded", natural_column(factor)]
     header += [response_column(r.name, r.units) for r in spec.responses]
@@ -68,7 +69,10 @@ def run_sheet_rows(design: Design, spec: DesignSpec, *, seed: int = 0) -> tuple[
     rows: list[list] = []
     for position, run in enumerate(order):
         coded_row = design.matrix[run]
-        row: list = [position + 1, run_type(coded_row)]
+        row: list = [position + 1]
+        if blocked:
+            row.append(int(design.blocks[run]) + 1)  # 1-based on the bench sheet
+        row.append(run_type(coded_row))
         for j in range(len(spec.factors)):
             row += [f"{coded_row[j]:g}", f"{decoded[run, j]:g}"]
         row += [""] * len(spec.responses)  # the scientist fills these in
@@ -101,6 +105,10 @@ def analysis_hint(spec: DesignSpec) -> dict:
     log = bool(spec.responses) and spec.responses[0].is_log
     lhs = f"np.log10({value})" if log else value
     formula = f"{lhs} ~ " + " * ".join(factors) if factors else ""
+    if formula and spec.n_blocks > 1:
+        # The block offset is fitted, never interpreted: it is there to remove
+        # day-to-day shifts, not to be tested as a finding.
+        formula += " + C(block)"
     return {
         "factor_columns": factors,
         "response_columns": responses,

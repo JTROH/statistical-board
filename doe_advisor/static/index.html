@@ -147,6 +147,10 @@
         <input type="number" id="losses" min="0" step="1" value="1">
       </div>
       <div class="field">
+        <label for="blocks">Blocks (days / batches)</label>
+        <input type="number" id="blocks" min="1" max="8" step="1" value="1">
+      </div>
+      <div class="field">
         <label for="hard-ranges"><input type="checkbox" id="hard-ranges"> Ranges are hard limits</label>
       </div>
     </div>
@@ -215,7 +219,7 @@
 
 <footer>
   <span id="footer-version"></span> &middot; runs entirely on your machine &middot;
-  classical designs only &mdash; constrained spaces, blocking and must&#8209;include runs are not yet supported
+  classical designs only &mdash; constrained spaces and must&#8209;include runs are not yet supported
 </footer>
 
 <script src="app.js"></script>

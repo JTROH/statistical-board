@@ -156,7 +156,10 @@ factors are required. `--spec -` reads the spec from stdin.
 `target_effect` / `noise_sd`. Power is then computed for log10 of the response;
 the run sheet still records raw values and its analysis hint fits
 `np.log10(<response>) ~ ...`. Ask for this whenever the user describes noise as
-a percentage. **Hard limits:** add `"hard_ranges": true` when a range is an
+a percentage. **Blocks:** add `"n_blocks": 2` (up to 8) when the runs cannot all be done on
+one day or from one batch. Runs are assigned to blocks D-optimally (the
+textbook split where one exists, checked against FrF2); the run sheet gains a
+`block` column and is ordered block by block. **Hard limits:** add `"hard_ranges": true` when a range is an
 operating limit (e.g. a fixed harvest window), so designs with runs outside it
 are disqualified rather than merely flagged.
 

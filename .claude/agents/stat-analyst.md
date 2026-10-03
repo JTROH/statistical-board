@@ -68,6 +68,8 @@ one-off script for what these already compute deterministically):
   extrapolates to an untested/interior point), and flags whether the best
   setting sits at a factor's tested boundary (a real optimum may lie beyond the
   tested range).
+- **Blocked run sheets.** If the data has a `block` column, add `+ C(block)` to
+  every formula. It removes day/batch shifts; do not report it as an effect.
 - `stationary-point --formula "..." --factor F1 --factor F2` — for a quadratic
   model: whether the surface has a maximum, minimum or saddle, where (with
   CIs), and whether that point is inside the tested region. Run it whenever the

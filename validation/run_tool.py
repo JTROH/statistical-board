@@ -19,7 +19,14 @@ from doe_advisor.designs.model import model_matrix, model_terms
 from doe_advisor.designs.properties import d_efficiency, power_report
 from doe_advisor.designs.spec import DesignSpec, Factor, ModelOrder, Response
 
-from .cases import BOX_BEHNKEN_CASES, CENTRAL_COMPOSITE_CASES, DSD_CASES, FRACTIONAL_CASES, POWER_CASES
+from .cases import (
+    BLOCKING_CASES,
+    BOX_BEHNKEN_CASES,
+    CENTRAL_COMPOSITE_CASES,
+    DSD_CASES,
+    FRACTIONAL_CASES,
+    POWER_CASES,
+)
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -136,6 +143,29 @@ def power_results() -> list[dict]:
     return out
 
 
+def blocking_results() -> list[dict]:
+    """Which factorial words the block contrasts are confounded with."""
+    from itertools import combinations
+
+    from doe_advisor.designs.blocking import assign_blocks
+    from doe_advisor.designs.model import block_columns
+
+    out = []
+    for k, b in BLOCKING_CASES:
+        design = C.full_factorial(k)
+        labels = assign_blocks(design.matrix, model_terms(k, ModelOrder.INTERACTION), b)
+        blocks = block_columns(labels)
+        lengths = []
+        for r in range(1, k + 1):
+            for word in combinations(range(k), r):
+                col = np.prod(design.matrix[:, list(word)], axis=1)
+                coef, *_ = np.linalg.lstsq(blocks, col, rcond=None)
+                if np.allclose(blocks @ coef, col):  # the word lies in the block space
+                    lengths.append(r)
+        out.append({"case": f"2^{k} in {b} blocks", "block_word_lengths": sorted(lengths)})
+    return out
+
+
 def main() -> int:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -145,6 +175,7 @@ def main() -> int:
         "central_composite": central_composite_results(),
         "dsd": dsd_results(),
         "power": power_results(),
+        "blocking": blocking_results(),
     }
     path = RESULTS_DIR / "tool.json"
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

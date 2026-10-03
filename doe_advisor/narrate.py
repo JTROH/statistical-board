@@ -390,9 +390,21 @@ def _caveats(spec: DesignSpec, options: list[ScoredDesign]) -> list[str]:
             "settings are physically runnable before committing."
         )
 
+    if spec.n_blocks > 1:
+        partners = sorted({p for o in options for p in o.properties.aliasing.block_partners})
+        notes.append(
+            f"The runs are split into {spec.n_blocks} blocks (days or batches). Each block gets its own "
+            "offset in the model, which costs degrees of freedom but stops a block-to-block shift from "
+            "posing as a factor effect. Analyse with the block in the model; the analysis hint does this."
+            + (
+                f" The block split absorbs terms the model leaves out: {', '.join(partners[:4])}."
+                if partners
+                else ""
+            )
+        )
     notes.append(
-        "These are classical designs. Constrained design spaces, must-include historical runs, and "
-        "blocking are not yet supported."
+        "These are classical designs. Constrained design spaces and must-include historical runs "
+        "are not yet supported."
     )
     notes.append("Randomise the run order before executing — the run sheet gives one such order.")
     return notes

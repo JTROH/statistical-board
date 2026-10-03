@@ -42,6 +42,7 @@ class FormPayload(BaseModel):
     n_center_points: float | None = 3
     expected_run_losses: float | None = 1
     hard_ranges: bool = False
+    n_blocks: float | None = 1
     title: str | None = None
 
 

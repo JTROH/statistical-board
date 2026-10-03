@@ -46,3 +46,10 @@ POWER_CASES: list[tuple[str, int, int, str, float]] = [
     ("bbd", 3, 3, "quadratic", 2.0),
     ("bbd", 4, 3, "quadratic", 2.0),
 ]
+
+# Blocked full factorials: (n_factors, n_blocks), fitting main effects + 2FI.
+# Compared against R's FrF2(blocks=...) on the word-length pattern of the
+# interactions the blocks are confounded with (e.g. 2^5 in 4 blocks: ABC,
+# BCDE, ADE -> [3, 3, 4]). Minimum aberration means the same pattern, not
+# necessarily the same words.
+BLOCKING_CASES: list[tuple[int, int]] = [(3, 2), (4, 2), (5, 2), (5, 4), (6, 2), (6, 4)]

@@ -75,6 +75,17 @@ def _number(value, field: str, allow_none: bool = False) -> float | None:
     return parsed
 
 
+def _blocks(value) -> int:
+    blocks = _number(value, "number of blocks", allow_none=True)
+    if blocks is None:
+        return 1
+    if blocks < 1 or blocks != int(blocks):
+        raise IntakeError("The number of blocks must be a whole number, 1 or more (1 = no blocking).")
+    if blocks > 8:
+        raise IntakeError("At most 8 blocks are supported.")
+    return int(blocks)
+
+
 def cv_to_log10_sd(cv_pct: float) -> float:
     """SD on the log10 scale of a lognormal response with this CV.
 
@@ -201,6 +212,7 @@ def spec_from_dict(payload: dict) -> DesignSpec:
         n_center_points=3 if centre is None else max(int(centre), 0),
         expected_run_losses=1 if losses is None else max(int(losses), 0),
         hard_ranges=bool(payload.get("hard_ranges", False)),
+        n_blocks=_blocks(payload.get("n_blocks")),
     )
 
 
@@ -230,6 +242,7 @@ def spec_to_dict(spec: DesignSpec) -> dict:
         "n_center_points": spec.n_center_points,
         "expected_run_losses": spec.expected_run_losses,
         "hard_ranges": spec.hard_ranges,
+        "n_blocks": spec.n_blocks,
     }
 
 

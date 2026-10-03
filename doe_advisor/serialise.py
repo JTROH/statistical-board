@@ -49,6 +49,8 @@ def serialise_option(option, response=None) -> dict:
         "noise_stress_factor": round(props.power.noise_stress_factor, 4),
         "worst_alias": round(props.aliasing.worst_main_effect_alias, 4),
         "alias_statements": props.aliasing.statements(limit=4),
+        "n_blocks": option.design.n_blocks,
+        "block_partners": props.aliasing.block_partners,
         "i_value": props.prediction.i_value if props.prediction.i_value != float("inf") else None,
         "g_efficiency": round(props.prediction.g_efficiency, 4),
         "d_efficiency": round(props.d_efficiency, 4),

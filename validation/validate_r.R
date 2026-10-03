@@ -148,6 +148,32 @@ power <- lapply(power_cases, function(case) {
   )
 })
 
+# ---------------------------------------------------------------------------
+# Blocked full factorials
+# ---------------------------------------------------------------------------
+# block.gen holds Yates column numbers: bit i set = factor i in the word. The
+# block words are every non-empty XOR of the generators.
+
+blocking_cases <- list(c(3, 2), c(4, 2), c(5, 2), c(5, 4), c(6, 2), c(6, 4))
+
+blocking <- lapply(blocking_cases, function(case) {
+  k <- case[1]; b <- case[2]
+  d <- FrF2(nruns = 2^k, nfactors = k, blocks = b, randomize = FALSE, alias.block.2fis = FALSE)
+  gens <- as.integer(unlist(design.info(d)$block.gen))
+  r <- length(gens)
+  words <- integer(0)
+  for (m in 1:(2^r - 1)) {
+    w <- 0L
+    for (i in seq_len(r)) if (bitwAnd(m, bitwShiftL(1L, i - 1L)) > 0) w <- bitwXor(w, gens[i])
+    words <- c(words, w)
+  }
+  popcount <- function(x) sum(as.integer(intToBits(x)))
+  list(
+    case = sprintf("2^%d in %d blocks", k, b),
+    block_word_lengths = sort(vapply(words, popcount, numeric(1)))
+  )
+})
+
 payload <- list(
   source = "R",
   r_version = paste(R.version$major, R.version$minor, sep = "."),
@@ -156,7 +182,8 @@ payload <- list(
   fractional = fractional,
   box_behnken = box_behnken,
   central_composite = central_composite,
-  power = power
+  power = power,
+  blocking = blocking
 )
 
 write(toJSON(payload, auto_unbox = TRUE, digits = 12),

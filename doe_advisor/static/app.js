@@ -120,6 +120,7 @@ function readForm() {
     n_center_points: numOrNull($("centre").value),
     expected_run_losses: numOrNull($("losses").value),
     hard_ranges: $("hard-ranges").checked,
+    n_blocks: numOrNull($("blocks").value),
     title: named.length
       ? `Design options: ${named.map((f) => f.name).join(", ")}`
       : "Experimental design memo",
@@ -142,6 +143,7 @@ function writeForm(form) {
   if (form.n_center_points != null) $("centre").value = form.n_center_points;
   if (form.expected_run_losses != null) $("losses").value = form.expected_run_losses;
   $("hard-ranges").checked = Boolean(form.hard_ranges);
+  if (form.n_blocks != null) $("blocks").value = form.n_blocks;
   updateModelNote();
   updateEffectNote();
 }

@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .designs import classical as C
+from .designs.blocking import assign_blocks
+from .designs.model import model_terms
 from .designs.properties import DesignProperties, evaluate
 from .designs.spec import Design, DesignSpec
 
@@ -136,7 +138,26 @@ def generate_candidates(spec: DesignSpec) -> list[Design]:
             continue
         seen.append(design.matrix)
         unique.append(design)
+    if spec.n_blocks > 1:
+        unique = [b for b in (_blocked(d, spec) for d in unique) if b is not None]
     return unique
+
+
+def _blocked(design: Design, spec: DesignSpec) -> Design | None:
+    """The same runs, split into the spec's blocks; None if they cannot be."""
+    terms = model_terms(design.n_factors, spec.model_order)
+    try:
+        labels = assign_blocks(design.matrix, terms, spec.n_blocks)
+    except ValueError:
+        return None
+    return Design(
+        name=f"{design.name}, {spec.n_blocks} blocks",
+        family=design.family,
+        matrix=design.matrix,
+        factor_names=list(design.factor_names),
+        detail={**design.detail, "n_blocks": spec.n_blocks},
+        blocks=labels,
+    )
 
 
 # --------------------------------------------------------------------------
