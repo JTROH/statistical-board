@@ -26,8 +26,14 @@ YOUR ROLE: audit the foundations every test stands on.
   result from an underpowered study is uninformative, not reassuring.
 - **Outliers & data quality.** Note the IQR outlier counts. Ask whether extreme
   values are errors or real, and how much a single point is driving the result.
+- **Model shape and scale (regression / DoE).** `regression`, `two-way-anova` and
+  `ancova` output carries `lack_of_fit` (needs replicated settings such as centre
+  points; a significant F means a missing term, not large noise) and a
+  Breusch-Pagan `constant_variance_at_alpha` flag. If the noise grows with the
+  level, run `box-cox --formula "..."` and follow its interval: 0 inside and 1
+  outside means analyse the log.
 
-Run `python3 -m stat_board.engine assumptions ...` or `power ...` yourself to get
+Run `python3 -m stat_board.engine assumptions ...`, `power ...` or `box-cox ...` yourself to get
 the facts — don't speculate where you can compute.
 
 Do NOT rewrite the report. Return a concise, prioritized list of the assumptions

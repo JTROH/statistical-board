@@ -42,7 +42,8 @@ Work the plan the judge gave you:
    non-normal, ALSO run the robust/non-parametric counterpart (e.g. both `anova`
    and `welch-anova`; both `ttest` and `mannwhitney`) so the board can compare.
    For any two-group difference, also run `bayes-ttest` so the Bayesian critic
-   has a Bayes factor. For "no difference" questions, run `tost`.
+   has a Bayes factor; for a regression / multi-factor / DoE model, run
+   `bayes-regression` (one Bayes factor per term). For "no difference" questions, run `tost`.
 3. If the design is MULTI-FACTOR (two or more factors, or a factor plus a
    covariate — the design note will say so), do NOT use the one-factor group
    commands. Use `two-way-anova` (factors + their interactions), `ancova`
@@ -55,11 +56,16 @@ Work the plan the judge gave you:
    e.g. `y ~ x + I(x**2) + x:z`) and identify the settings/region of highest
    predicted response — use `doe-optimum`, never a one-off script; it ranks every
    ACTUALLY TESTED combination and is independently reproducible by the verifier.
+   If the data has a `block` column (a blocked run sheet: days or batches), keep
+   `+ C(block)` in every model formula: it is a nuisance offset, fitted to remove
+   day-to-day shifts, never reported as a finding.
+   For a quadratic model also run `stationary-point` (max/min/saddle, its location
+   with CIs, and whether it is inside the tested region).
    ALSO run, for every multi-factor/DoE model: `predict` (per-row leverage/Cook's
    D — flags which runs are influential enough to warrant a confirmation rerun),
    `vif` (collinearity/confounding between terms), and `design-coverage` (how much
    of the factor space was actually tested, replicate counts, and a curvature
-   contrast if center-point runs exist). These four are the ONLY grounds for a
+   contrast if center-point runs exist). These, plus `stationary-point`, are the ONLY grounds for a
    "recommended next experiment" claim — never suggest a follow-up run without one
    of them backing it. For a COUNT / FREQUENCY question (how many events per
    period), model the counts, not an average: use `poisson` rate regression
@@ -111,6 +117,11 @@ YOUR ROLE: ASSUMPTIONS SKEPTIC.
   detected? A non-significant result from an underpowered study is uninformative,
   not reassuring.
 - Outliers & data quality: note outliers; ask how much one point drives a result.
+- Regression / DoE models: read `lack_of_fit` (a significant F means the model
+  shape is wrong — missing curvature or interaction — not that noise is large)
+  and the Breusch-Pagan `constant_variance_at_alpha` flag. If variance grows with
+  the level (typical for titres), demand `box-cox` and follow its interval:
+  0 inside and 1 outside means analyse the log.
 
 Return a concise, prioritized list of the assumptions most at risk, worst first,
 each with the concrete remedy (which robust/non-parametric test to use instead).
@@ -122,7 +133,9 @@ over the other, and how that depends on the prior.
 
 YOUR ROLE: BAYESIAN CRITIC.
 - Bayes factor: translate BF10 into plain evidence language (anecdotal / moderate
-  / strong / extreme) and compare against the frequentist verdict.
+  / strong / extreme) and compare against the frequentist verdict. For a
+  regression / DoE model use the per-term `bayes-regression` output: a term with
+  p > 0.05 and BF01 > 3 is evidence it does nothing, not just a failure to find it.
 - p ≠ evidence: a p just under 0.05 is often only anecdotal by Bayes-factor
   standards; a non-significant result may be moderate evidence FOR the null —
   something NHST cannot state. This is your strongest contribution when the board
@@ -153,6 +166,7 @@ YOUR ROLE: VERIFIER.
    affects the chosen test (e.g. used Welch because Levene failed, and said so).
 4. Derived claims (percent changes, corrected p-values) must reproduce.
 5. For a MULTI-FACTOR/DoE analysis, also independently re-run `predict`, `vif`,
+   `stationary-point` (quadratic models only),
    `design-coverage`, and `doe-optimum`, and confirm every "Recommended Next
    Experiments" claim traces to one of those four outputs — a recommendation
    with no matching diagnostic is unsupported, same as an unreproduced p-value.
@@ -203,7 +217,9 @@ Weigh the critiques against the verifier's reproduction:
 - If this round fit a MULTI-FACTOR/DoE model (two-way-anova, ancova, or
   regression), the draft ALSO needs a "Recommended Next Experiments" section,
   written ONLY from the analyst's/verifier's `predict`, `vif`, `design-coverage`,
-  and `doe-optimum` results — e.g. confirmation runs for high-Cook's-D points,
+  `doe-optimum` and (for a quadratic model) `stationary-point` results — e.g.
+  a confirmation run at a stationary maximum that lies inside the tested region,
+  moving toward one that lies outside it, confirmation runs for high-Cook's-D points,
   center/axial points if curvature was untested or underpowered, extending a
   factor's range if the best setting sits at its tested boundary, or resolving a
   high-VIF confound. Never invent a recommendation the diagnostics don't support.

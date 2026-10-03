@@ -193,6 +193,15 @@ def build_multifactor(data_path: str, formula: str, *, factors: list[str] | None
         checks.append(["Normality of residuals (Shapiro–Wilk)",
                        f"W={_f(rd['resid_shapiro_W'])}, p={_f(rd['resid_shapiro_p'])}",
                        "OK" if rd["resid_normal_at_alpha"] else "violated"])
+    if "breusch_pagan_p" in rd:
+        checks.append(["Constant variance (Breusch–Pagan)",
+                       f"F={_f(rd['breusch_pagan_F'])}, p={_f(rd['breusch_pagan_p'])}",
+                       "OK" if rd["constant_variance_at_alpha"] else "violated"])
+    lof = fit.get("lack_of_fit")
+    if lof:
+        checks.append([f"Lack of fit (vs pure error, {lof['df_pure_error']} df)",
+                       f"F={_f(lof['F'])}, p={_f(lof['p'])}",
+                       "model shape wrong" if lof["lack_of_fit_at_alpha"] else "OK"])
     parts.append("\n**Residual diagnostics**\n")
     parts.append(_table(["Check", "Statistic", "Verdict"], checks))
 
@@ -256,5 +265,22 @@ def build_multifactor(data_path: str, formula: str, *, factors: list[str] | None
             parts.append(_table(
                 ["Factor", "Best setting", "Position"],
                 [[f, _f(opt["best"][f]), opt["boundary_flags"].get(f, "")] for f in factors]))
+
+        try:
+            sp = analyses.stationary_point(data_path, formula, factors, alpha=alpha)
+        except ValueError as exc:
+            parts.append(f"\n**Stationary point**: not computed — {exc}.\n")
+        except Exception:  # noqa: BLE001 -- same rationale as the outer fit above
+            sp = None
+        else:
+            parts.append(f"\n**Stationary point** (canonical analysis): a **{sp['kind']}**, "
+                         f"predicted {_f(sp['predicted'])} "
+                         f"[{_f(sp['predicted_ci'][0])}, {_f(sp['predicted_ci'][1])}]. {sp['verdict']}\n")
+            parts.append(_table(
+                ["Factor", "Location", f"{int((1 - alpha) * 100)}% CI", "Tested range", "Inside"],
+                [[f, _f(v["value"]), f"[{_f(v['ci'][0])}, {_f(v['ci'][1])}]",
+                  f"{_f(v['tested_range'][0])} – {_f(v['tested_range'][1])}",
+                  "yes" if v["inside_tested_range"] else "no"] for f, v in sp["location"].items()]))
+            parts.append(f"\n*{sp['note']}*\n")
 
     return "\n\n".join(parts) + "\n", assets_dir

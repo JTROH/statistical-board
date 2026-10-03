@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Statistical Workbench</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { display: flex; flex-direction: column; font-family: -apple-system, system-ui, sans-serif;
+         background: #0f5e6e; }
+  nav { display: flex; align-items: center; gap: 4px; padding: 6px 12px 0; color: #fff; }
+  nav .brand { font-weight: 600; margin-right: 16px; font-size: 14px; }
+  nav .step { font-size: 12px; color: #bfe6ec; margin-left: auto; }
+  nav button { border: 0; border-radius: 6px 6px 0 0; padding: 8px 16px; font: inherit; font-size: 13.5px;
+               cursor: pointer; background: #157d90; color: #e6f6f8; }
+  nav button[aria-selected="true"] { background: #fff; color: #14343b; font-weight: 600; }
+  main { flex: 1; position: relative; background: #fff; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  iframe[hidden] { display: none; }
+</style>
+</head>
+<body>
+<nav role="tablist">
+  <span class="brand">Statistical Workbench</span>
+  <button role="tab" data-tab="design">1 · Plan the experiment</button>
+  <button role="tab" data-tab="analyse">2 · Analyse the results</button>
+  <span class="step">Plan &rarr; run sheet &rarr; experiment &rarr; analyse &rarr; next experiment</span>
+</nav>
+<main>
+  <!-- Both stay loaded, so switching tabs never loses a half-filled form. -->
+  <iframe id="frame-design" src="/design/" title="Plan the experiment"></iframe>
+  <iframe id="frame-analyse" src="/analyse/" title="Analyse the results" hidden></iframe>
+</main>
+<script>
+function show(tab) {
+  if (tab !== "design" && tab !== "analyse") tab = "design";
+  for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", b.dataset.tab === tab);
+  document.getElementById("frame-design").hidden = tab !== "design";
+  document.getElementById("frame-analyse").hidden = tab !== "analyse";
+  history.replaceState(null, "", "?tab=" + tab);
+}
+for (const b of document.querySelectorAll("nav button")) b.onclick = () => show(b.dataset.tab);
+// The pages' own "go to the other tool" links post this instead of opening a port.
+window.addEventListener("message", (e) => {
+  if (e.origin === location.origin && e.data && e.data.tab) show(e.data.tab);
+});
+show(new URLSearchParams(location.search).get("tab"));
+</script>
+</body>
+</html>

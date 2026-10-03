@@ -1,17 +1,27 @@
-# === Statistics engine (required for everything) ===
-numpy>=1.26
-scipy>=1.11
-pandas>=2.0
+# === Numerics (required for everything) ===
+# Floors are the higher of what either half of the package needs.
+numpy>=2.0
+scipy>=1.14
+
+# === Statistics engine (stat_board.engine) ===
+# The design engine (doe_advisor.designs) deliberately uses neither -- it is
+# numpy + scipy only, so it stays dependency-light.
+pandas>=2.2
 statsmodels>=0.14
 
-# === PDF report with figures (report renderer) ===
-markdown>=3.5
+# === PDF reports and memos with figures (pdstat.report + figures) ===
+markdown>=3.6
 pymupdf>=1.24
-matplotlib>=3.7
-pillow>=10.0
+matplotlib>=3.9
+pillow>=10.3
 
-# === Standalone board: CLI orchestrator + web UI (needs an API key) ===
-# Not required to use the engine, the desktop GUI, or the Claude Code skills.
-anthropic>=0.70.0
+# === Web UIs: the board (port 8643) and the DoE advisor (port 8711) ===
 fastapi>=0.115
 uvicorn>=0.30
+python-multipart>=0.0.9
+
+# === LLM layers (both optional) ===
+# Needed by the standalone board (`python -m stat_board`) and by the DoE
+# advisor's optional chat intake + narration. Neither the statistics engine,
+# the design engine, the desktop GUI, nor the Claude Code skills require a key.
+anthropic>=0.70.0

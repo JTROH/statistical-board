@@ -431,11 +431,106 @@ def _fit_and_anova(path: str, formula: str, *, typ: int = 2, alpha: float = 0.05
         w, p = stats.shapiro(resid)
         diagnostics.update(resid_shapiro_W=float(w), resid_shapiro_p=float(p),
                            resid_normal_at_alpha=bool(p > alpha))
+    exog = np.asarray(model.model.exog, float)
+    if exog.shape[1] > 1 and len(resid) > exog.shape[1]:
+        from statsmodels.stats.diagnostic import het_breuschpagan
+
+        _, _, bp_f, bp_p = het_breuschpagan(resid, exog)
+        diagnostics.update(breusch_pagan_F=float(bp_f), breusch_pagan_p=float(bp_p),
+                           constant_variance_at_alpha=bool(bp_p > alpha))
     return {
         "formula": formula, "typ": typ, "n": int(model.nobs),
         "r_squared": float(model.rsquared), "adj_r_squared": float(model.rsquared_adj),
         "f_pvalue": float(model.f_pvalue), "aic": float(model.aic), "bic": float(model.bic),
+        "residual_sd": float(np.sqrt(model.scale)), "residual_df": int(model.df_resid),
         "anova": terms, "coefficients": coefs, "residual_diagnostics": diagnostics,
+        "lack_of_fit": _lack_of_fit(model, alpha),
+    }
+
+
+def _lack_of_fit(model, alpha: float) -> dict[str, Any] | None:
+    """Lack-of-fit F test: does the model's residual scatter exceed the scatter
+    between true replicates (runs with identical settings)?
+
+    Needs replicated settings (e.g. centre points) for pure error, and more
+    distinct settings than model parameters. Returns ``None`` when either is
+    missing — the test cannot be done, which is not the same as passing it.
+    A significant result means the model shape is wrong (missing curvature or
+    interaction), not that the noise is large.
+    """
+    exog = np.round(np.asarray(model.model.exog, float), 9)
+    endog = np.asarray(model.model.endog, float)
+    n, p = exog.shape
+    _, group = np.unique(exog, axis=0, return_inverse=True)
+    group = np.asarray(group).ravel()
+    n_settings = int(group.max()) + 1
+    df_pe, df_lof = n - n_settings, n_settings - p
+    if df_pe <= 0 or df_lof <= 0:
+        return None
+    ss_pe = float(sum(((endog[group == g] - endog[group == g].mean()) ** 2).sum() for g in range(n_settings)))
+    ss_lof = float(model.ssr) - ss_pe
+    if ss_pe <= 0:
+        return None
+    f = (ss_lof / df_lof) / (ss_pe / df_pe)
+    p_value = float(stats.f.sf(f, df_lof, df_pe))
+    return {
+        "ss_lack_of_fit": ss_lof, "df_lack_of_fit": int(df_lof),
+        "ss_pure_error": ss_pe, "df_pure_error": int(df_pe),
+        "pure_error_sd": float(np.sqrt(ss_pe / df_pe)),
+        "F": float(f), "p": p_value, "lack_of_fit_at_alpha": bool(p_value < alpha),
+    }
+
+
+def box_cox(path: str, formula: str, *, alpha: float = 0.05) -> dict[str, Any]:
+    """Box-Cox profile for the response of a linear model: which power
+    transform y^lambda makes the model's residuals best behaved.
+
+    Returns the best lambda and its (1 - alpha) likelihood interval. Read it as:
+    1 inside the interval -> no transform needed; 0 inside -> a log scale is
+    supported (typical for titres, whose noise grows with the level).
+    The response must be strictly positive.
+    """
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    y = np.asarray(model.model.endog, float)
+    x = np.asarray(model.model.exog, float)
+    if np.any(y <= 0):
+        raise ValueError("Box-Cox needs a strictly positive response")
+    n = len(y)
+    log_gm = float(np.mean(np.log(y)))
+
+    def loglik(lam: float) -> float:
+        # Scaled by the geometric mean so residual sums of squares are comparable across lambda.
+        if abs(lam) < 1e-9:
+            z = np.exp(log_gm) * np.log(y)
+        else:
+            z = (y**lam - 1.0) / (lam * np.exp(log_gm * (lam - 1.0)))
+        beta, *_ = np.linalg.lstsq(x, z, rcond=None)
+        rss = float(((z - x @ beta) ** 2).sum())
+        return -0.5 * n * np.log(rss / n)
+
+    grid = np.round(np.arange(-3.0, 3.0 + 1e-9, 0.01), 2)
+    ll = np.array([loglik(lam) for lam in grid])
+    best = int(np.argmax(ll))
+    cut = ll[best] - 0.5 * stats.chi2.ppf(1.0 - alpha, 1)
+    inside = grid[ll >= cut]
+    low, high = float(inside.min()), float(inside.max())
+    if low <= 1.0 <= high:
+        advice = "1 is inside the interval: no transform is needed."
+    elif low <= 0.0 <= high:
+        advice = "0 is inside the interval and 1 is not: analyse the log of the response."
+    else:
+        advice = f"Neither 0 nor 1 is inside the interval: consider y^{grid[best]:g}."
+    return {
+        "analysis": "box_cox", "formula": formula, "n": n, "alpha": alpha,
+        "lambda": float(grid[best]), "ci": [low, high],
+        "includes_1": bool(low <= 1.0 <= high), "includes_0": bool(low <= 0.0 <= high),
+        "interval_hits_search_edge": bool(low <= grid[0] or high >= grid[-1]),
+        "advice": advice,
     }
 
 
@@ -686,6 +781,181 @@ def doe_optimum(path: str, formula: str, factors: list[str], value: str) -> dict
         "rows": rows, "best": best, "boundary_flags": boundary_flags,
         "note": "Predictions are evaluated only at each factor's ACTUALLY TESTED "
                 "levels -- this never claims an interior/untested optimum.",
+    }
+
+
+def bayes_regression(path: str, formula: str, *, r: float = bayes.REGRESSION_PRIOR_SCALE) -> dict[str, Any]:
+    """Bayes factor for each term of a linear model: the full model against the
+    same model without that term (all of the term's columns).
+
+    JZS / Zellner-Siow prior with every predictor sharing one g — the same
+    numbers as R's ``BayesFactor::regressionBF`` / ``lmBF`` for continuous
+    predictors (a categorical term such as ``C(block)`` is treated as its
+    dummy columns under the same g, which BayesFactor does differently).
+    BF10 > 1 favours keeping the term; BF10 < 1 is evidence it does nothing,
+    which a p-value can never give.
+    """
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    y = np.asarray(model.model.endog, float)
+    x = np.asarray(model.model.exog, float)
+    design_info = model.model.data.design_info
+    n = len(y)
+    tss = float(((y - y.mean()) ** 2).sum())
+
+    def r2_of(columns: list[int]) -> float:
+        beta, *_ = np.linalg.lstsq(x[:, columns], y, rcond=None)
+        return 1.0 - float(((y - x[:, columns] @ beta) ** 2).sum()) / tss
+
+    intercept = [i for i, name in enumerate(design_info.column_names) if name == "Intercept"]
+    if not intercept:
+        raise ValueError("the formula needs an intercept for these Bayes factors")
+    all_cols = list(range(x.shape[1]))
+    p_full = x.shape[1] - 1
+    log_bf_full = np.log(bayes.bayesfactor_r2(n, p_full, r2_of(all_cols), r=r))
+
+    terms = []
+    for term_name, cols in design_info.term_name_slices.items():
+        if term_name == "Intercept":
+            continue
+        dropped = set(range(cols.start, cols.stop))
+        kept = [i for i in all_cols if i not in dropped]
+        p_reduced = len(kept) - 1
+        log_bf_reduced = 0.0 if p_reduced == 0 else np.log(bayes.bayesfactor_r2(n, p_reduced, r2_of(kept), r=r))
+        bf10 = float(np.exp(log_bf_full - log_bf_reduced))
+        terms.append({"term": term_name, "bf10": bf10, "bf01": 1.0 / bf10,
+                      "interpretation": bayes.interpret_bf(bf10)})
+    return {
+        "analysis": "bayes_regression", "formula": formula, "n": n, "prior_scale": r,
+        "model_bf10_vs_intercept": float(np.exp(log_bf_full)),
+        "terms": terms,
+        "note": "Each BF compares the full model with the model lacking that term (JZS prior, one shared g). "
+                "Terms involved in an interaction are compared with the interaction still present.",
+    }
+
+
+def stationary_point(path: str, formula: str, factors: list[str], *, alpha: float = 0.05) -> dict[str, Any]:
+    """Canonical analysis of a fitted second-order model: where the surface is
+    flat, whether that point is a maximum, minimum or saddle, and how precisely
+    it is located.
+
+    Complements ``doe-optimum``, which ranks only tested settings. This one may
+    land between them — or outside the tested region, which it flags rather
+    than hides. The location's CI is a delta-method interval: a ratio of noisy
+    coefficients, so it is approximate and widens fast when the curvature is
+    weak.
+
+    Works for any formula that is quadratic in ``factors`` (main effects,
+    interactions, squared terms, in natural units, with or without other
+    columns, which are held at their mean / mode). The gradient and Hessian are
+    read off the model's own design matrix by central differences, exact for a
+    quadratic; a formula that is not quadratic is refused, not approximated.
+    """
+    import patsy
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    design_info = model.model.data.design_info
+    k = len(factors)
+    lows = np.array([float(df[f].min()) for f in factors])
+    highs = np.array([float(df[f].max()) for f in factors])
+    centre, half = (lows + highs) / 2.0, (highs - lows) / 2.0
+    if np.any(half <= 0):
+        raise ValueError("every factor needs at least two tested levels")
+    ref = {}
+    for c in df.columns:
+        if c not in factors:
+            ref[c] = df[c].mean() if pd.api.types.is_numeric_dtype(df[c]) else df[c].mode().iloc[0]
+
+    def rows(coded: np.ndarray) -> np.ndarray:
+        """Design-matrix rows for points given in coded units (-1..+1 = tested range)."""
+        coded = np.atleast_2d(coded)
+        frame = pd.DataFrame([{**ref, **dict(zip(factors, centre + half * u, strict=True))} for u in coded])
+        return np.asarray(patsy.build_design_matrices([design_info], frame)[0], float)
+
+    # Linear operators: gradient G (k x p) and Hessian Hs (k x k x p) at the
+    # centre, so that g = G @ beta and H = Hs @ beta for any coefficient vector.
+    d = 0.5
+    eye = np.eye(k)
+    x0 = rows(np.zeros(k))[0]
+    G = np.array([(rows(d * eye[i])[0] - rows(-d * eye[i])[0]) / (2 * d) for i in range(k)])
+    Hs = np.empty((k, k, x0.size))
+    for i in range(k):
+        Hs[i, i] = (rows(d * eye[i])[0] - 2 * x0 + rows(-d * eye[i])[0]) / d**2
+        for j in range(i + 1, k):
+            Hs[i, j] = Hs[j, i] = (
+                rows(d * (eye[i] + eye[j]))[0] - rows(d * (eye[i] - eye[j]))[0]
+                - rows(d * (-eye[i] + eye[j]))[0] + rows(-d * (eye[i] + eye[j]))[0]
+            ) / (4 * d**2)
+
+    # Refuse anything that is not exactly quadratic in the factors.
+    probe = np.random.default_rng(0).uniform(-1.5, 1.5, size=(8, k))
+    quad = x0 + probe @ G + 0.5 * np.einsum("ni,ijp,nj->np", probe, Hs, probe)
+    if not np.allclose(rows(probe), quad, atol=1e-8 * max(1.0, float(np.abs(rows(probe)).max()))):
+        raise ValueError("the formula is not quadratic in the given factors; canonical analysis needs a "
+                         "second-order model (main effects, interactions, squared terms)")
+
+    # Structural check, before looking at any estimate: an interaction-only
+    # model has a Hessian too, but calling it a saddle would report the
+    # formula, not the data.
+    missing = [f for i, f in enumerate(factors) if not np.any(np.abs(Hs[i, i]) > 1e-12)]
+    if missing:
+        raise ValueError(f"no squared term for {', '.join(missing)}: the model has no curvature in that "
+                         "direction, so it cannot locate an optimum (add I(x**2) for every factor)")
+
+    beta = np.asarray(model.params, float)
+    cov = np.asarray(model.cov_params(), float)
+    g, H = G @ beta, Hs @ beta
+    eigvals = np.linalg.eigvalsh(H)
+    if np.min(np.abs(eigvals)) < 1e-12 * max(1.0, float(np.abs(eigvals).max())):
+        raise ValueError("the fitted surface has no curvature along some direction (singular Hessian); "
+                         "a squared term for every factor is needed")
+    u = -np.linalg.solve(H, g)  # stationary point, coded units
+
+    # Delta method: du/dbeta_j = -H^-1 (G_j + Hs_j u).
+    H_inv = np.linalg.inv(H)
+    J = -H_inv @ (G + np.einsum("ijp,j->ip", Hs, u))
+    se_u = np.sqrt(np.clip(np.diag(J @ cov @ J.T), 0.0, None))
+    tcrit = float(stats.t.ppf(1 - alpha / 2, model.df_resid))
+
+    natural = centre + half * u
+    se_nat = half * se_u
+    kind = "maximum" if np.all(eigvals < 0) else ("minimum" if np.all(eigvals > 0) else "saddle")
+    point = {**ref, **dict(zip(factors, natural, strict=True))}
+    pred = model.get_prediction(pd.DataFrame([point])).summary_frame(alpha=alpha).iloc[0]
+    location = {}
+    for i, f in enumerate(factors):
+        location[f] = {
+            "value": float(natural[i]), "std_err": float(se_nat[i]),
+            "ci": [float(natural[i] - tcrit * se_nat[i]), float(natural[i] + tcrit * se_nat[i])],
+            "tested_range": [float(lows[i]), float(highs[i])],
+            "inside_tested_range": bool(lows[i] - 1e-9 <= natural[i] <= highs[i] + 1e-9),
+        }
+    inside = all(v["inside_tested_range"] for v in location.values())
+    if kind == "saddle":
+        verdict = ("The surface is a saddle: it rises in some directions and falls in others, so there is "
+                   "no single best setting. Use doe-optimum for the best tested setting.")
+    elif not inside:
+        verdict = (f"The fitted {kind} lies outside the tested region; the model cannot vouch for it. "
+                   "Treat it as a direction to explore, not a setting to run.")
+    else:
+        verdict = f"The fitted surface has a {kind} inside the tested region."
+    return {
+        "analysis": "stationary_point", "formula": formula, "factors": factors, "alpha": alpha,
+        "kind": kind, "inside_tested_region": inside, "location": location,
+        "predicted": float(pred["mean"]),
+        "predicted_ci": [float(pred["mean_ci_lower"]), float(pred["mean_ci_upper"])],
+        "eigenvalues_coded": [float(v) for v in eigvals],
+        "verdict": verdict,
+        "note": "Location CIs are delta-method approximations; they are unreliable when the "
+                "curvature itself is barely significant.",
     }
 
 

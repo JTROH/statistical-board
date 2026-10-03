@@ -1,17 +1,90 @@
 # Statistical Board
 
-**An adversarial, STORM-inspired multi-agent system for statistical analysis.**
-A judge-led board of six roles turns a dataset and a question into a vetted PDF
-report — where every number is computed by a real statistics engine and
-independently reproduced before anything ships.
+**Design the experiment, then defend the answer.** Two halves of one job in one
+package: a design-of-experiments advisor that chooses the runs *before* you
+commit reactor time, and an adversarial six-role statistical board that vets the
+results *after*.
 
 Inspired by Stanford's STORM, but with one key twist: instead of grounding in web
-search, the board grounds in **computation**. An Analyst runs the actual tests; a
-Verifier re-runs them; three critics attack the analysis from different angles;
-and a Judge only finalizes when every conclusion is backed by a valid, reproduced
-test.
+search, both halves ground in **computation**. An Analyst runs the actual tests; a
+Verifier re-runs them; critics attack from different angles; and nothing ships
+that a real engine did not produce.
+
+## The loop
+
+```
+  /doe-plan  ──▶  runs.csv  ──▶  [ the experiment ]  ──▶  /stat-board
+      ▲                                                        │
+      │                                                        ▼
+      └────────  /doe-plan augment=<transcript>  ◀──  Recommended Next Experiments
+```
+
+The return arrow is the part most tools skip. A report that says *"augment to a
+central composite design"* is only advice; here the same four diagnostics that
+produced that sentence (`design-coverage`, `doe-optimum`, `vif`, `predict`) are
+read back by `doe_advisor.augment` and turned into an actual design — ranges
+widened where an optimum sat at a boundary, curvature fitted where centre runs
+showed a bend.
+
+| | Before the experiment | After the experiment |
+|---|---|---|
+| **Skill** | `/doe-plan` | `/stat-board` · `/stat-advisor` |
+| **Package** | `doe_advisor/` | `stat_board/` |
+| **Web app** | `python3 run_doe.py --open` → :8711 | `python3 -m stat_board.webapp` → :8643 |
+| **Both, one app** | `python3 run_app.py --open` → :8700 (tabs: Plan · Analyse) | |
+| **Desktop app** | `python3 run_desktop.py`, or build `Statistical Workbench.app` with `packaging/build_mac_app.sh` | |
+| **Does** | Generates and scores designs, writes a randomised run sheet | Fits the model, vets every number, writes a PDF report |
+| **Sees** | Only the design matrix — never a result | Only results — cannot generate a design |
 
 <p align="center"><em>See <a href="examples/sample_report.pdf">examples/sample_report.pdf</a> for a full generated report (figures + detailed tables included).</em></p>
+
+## Desktop app (macOS)
+
+The same two tabs in their own window, with no browser and no fixed port.
+
+```bash
+pip install pywebview
+python3 run_desktop.py                 # from source
+packaging/build_mac_app.sh             # builds dist/Statistical Workbench.app
+```
+
+Drag `dist/Statistical Workbench.app` into `/Applications`. The app saves
+reports and uploads in `~/Documents/Statistical Workbench/`, and copies the
+sample data there on first launch. For live board runs, put
+`ANTHROPIC_API_KEY=...` in a `.env` file in that folder. The app is not
+signed, so the first time, right-click it and choose **Open**.
+
+## Planning an experiment (`doe_advisor`)
+
+Declare your factors and ranges, what you measure, and your run budget. The
+engine enumerates every classical design that could answer the question and
+returns 2–3 genuinely different options tagged **Cheaper / Recommended / More
+thorough**, scored on four axes — and **run count is deliberately not one of
+them**; it is the price, not a virtue.
+
+- **Power** — will it see the effect you care about, even if the noise is worse than assumed (1.5×, or the upper confidence bound when the noise was measured)?
+- **Aliasing** — what will it refuse to tell you apart?
+- **Prediction** — I/D/A/G efficiency and FDS: can this support a range claim later?
+- **Robustness** — if you lose two bioreactors, does the study still fit the model?
+
+```bash
+python3 -m doe_advisor presets                              # domain presets
+python3 -m doe_advisor options   --spec spec.json           # the ranked shortlist
+python3 -m doe_advisor properties --spec spec.json          # full report for one design
+python3 -m doe_advisor runsheet  --spec spec.json --out runs.csv
+python3 run_doe.py --open                                   # web app on :8711
+```
+
+Designs it builds, all in-house numpy: full factorial, fractional factorial
+(minimum-aberration, **resolution computed from the defining relation**, never
+hardcoded), definitive screening (Jones & Nachtsheim, via Paley conference
+matrices), central composite (rotatable / face-centred / spherical), and
+Box-Behnken. Cross-validated against R's `FrF2` and `rsm` on frozen benchmark
+cases — run inside the normal test suite, so a design-engine change that breaks
+agreement with R fails `pytest`.
+
+The run sheet CSV carries `run_order`, `run_type`, coded *and* natural units per
+factor, and an empty column per response — the exact shape `stat_board` analyses.
 
 ## The board (six roles)
 
@@ -101,7 +174,10 @@ python3 -m stat_board.engine poisson --data counts_per_year.csv --formula "n ~ I
 ```bash
 python3 desktop_gui/statistical_analysis.py
 ```
-A small tkinter app for ANOVA / mean comparison / TOST — backed by the same engine.
+A tkinter app that picks the right test for you: paste/import your data, click
+**Recommend & Run Best Test**, get a plain-language summary and an optional PDF
+report — plus manual access to the full test menu (t-test variants, ANOVA
+family, TOST, Bayesian t-test, correlation), all backed by the same engine.
 
 ### 3. Standalone board: CLI + web UI (needs a key)
 ```bash
@@ -124,6 +200,7 @@ python3 -m stat_board "Any question" --data sample_data/wide.csv --dry-run
 ### 4. Claude Code skills (no key, runs on your Claude Code session)
 Open this folder in Claude Code (a fresh session) and run:
 ```
+/doe-plan                # design the experiment BEFORE you run it
 /stat-prep data=raw.csv  # profile, propose a cleaning recipe, confirm, apply
 /stat-board data=sample_data/long.csv question="Do the three groups differ?"
 /stat-advisor            # interactive statistical consultant
@@ -159,10 +236,18 @@ python3 -m stat_board.report reports/doe_report.md out.pdf \
 ## Layout
 
 ```
-stat_board/            the package: engine/ + prep, orchestrator, prompts, report, web UI
+doe_advisor/           BEFORE the experiment: design generation and scoring
+  designs/             the maths layer, coded units, numpy+scipy only (no opinions)
+  candidates.py        where the tool's opinion lives: AXIS_WEIGHTS, scoring, roles
+  export.py            run sheet -> CSV  (the handoff to stat_board)
+  augment.py           stat_board diagnostics -> the next design  (the return path)
+stat_board/            AFTER the experiment: analysis, vetting, reporting
   engine/              pure-Python statistics core (no LLM)
   prep.py              data profiling + reproducible cleaning recipes
-.claude/               Claude Code agents (stat-*) and skills (stat-prep, stat-board, stat-advisor)
+pdstat/                shared layer: the one Markdown -> PDF renderer
+presets/               swappable domain presets (Sf9, CHO, E. coli)
+validation/            cross-checks the design engine against R (FrF2, rsm) and JMP
+.claude/               Claude Code agents (stat-*) and skills (doe-plan, stat-*)
 desktop_gui/           tkinter GUI, backed by the engine
 sample_data/           synthetic example datasets
 examples/              a full generated sample report (PDF + Markdown + transcript)
@@ -170,7 +255,8 @@ examples/              a full generated sample report (PDF + Markdown + transcri
 
 ## Configuration
 
-Environment variables (all optional): `STAT_MODEL` (default `claude-opus-4-8`),
+Environment variables (all optional): `DOE_ADVISOR_MODEL` (default
+`claude-sonnet-5`), `STAT_MODEL` (default `claude-opus-4-8`),
 `STAT_EFFORT`, `STAT_MAX_ROUNDS`, `STAT_MAX_TOKENS`, `STAT_JUDGE_MAX_TOKENS`,
 `STAT_MAX_TOOL_CALLS`. See `.env.example`.
 
