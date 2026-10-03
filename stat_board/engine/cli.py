@@ -107,6 +107,11 @@ def build_parser() -> argparse.ArgumentParser:
     vi.add_argument("--data", required=True)
     vi.add_argument("--formula", required=True)
 
+    bc = sub.add_parser("box-cox", help="Box-Cox lambda + CI for the response of a linear model")
+    bc.add_argument("--data", required=True)
+    bc.add_argument("--formula", required=True)
+    bc.add_argument("--alpha", type=float, default=0.05)
+
     dcov = sub.add_parser("design-coverage", help="DoE design coverage, replicates, and curvature check")
     dcov.add_argument("--data", required=True)
     dcov.add_argument("--factor", action="append", required=True, dest="factors")
@@ -182,6 +187,8 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return analyses.predict_table(args.data, args.formula, alpha=args.alpha)
     if cmd == "vif":
         return analyses.vif_table(args.data, args.formula)
+    if cmd == "box-cox":
+        return analyses.box_cox(args.data, args.formula, alpha=args.alpha)
     if cmd == "design-coverage":
         return analyses.design_coverage(args.data, args.factors, value=args.value)
     if cmd == "doe-optimum":

@@ -111,6 +111,11 @@ YOUR ROLE: ASSUMPTIONS SKEPTIC.
   detected? A non-significant result from an underpowered study is uninformative,
   not reassuring.
 - Outliers & data quality: note outliers; ask how much one point drives a result.
+- Regression / DoE models: read `lack_of_fit` (a significant F means the model
+  shape is wrong — missing curvature or interaction — not that noise is large)
+  and the Breusch-Pagan `constant_variance_at_alpha` flag. If variance grows with
+  the level (typical for titres), demand `box-cox` and follow its interval:
+  0 inside and 1 outside means analyse the log.
 
 Return a concise, prioritized list of the assumptions most at risk, worst first,
 each with the concrete remedy (which robust/non-parametric test to use instead).

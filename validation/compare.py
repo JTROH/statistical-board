@@ -96,6 +96,20 @@ def compare_central_composite(ours: list[dict], theirs: list[dict], comparison: 
         comparison.check(case, "alpha", float(a["alpha"]), float(b["alpha"]), tol=1e-9)
 
 
+def compare_power(ours: list[dict], theirs: list[dict], comparison: Comparison) -> None:
+    mine, reference = _index(ours), _index(theirs)
+    for case in sorted(set(mine) & set(reference)):
+        a, b = mine[case], reference[case]
+        comparison.check(case, "n_runs", a["n_runs"], b["n_runs"])
+        comparison.check(case, "residual_df", a["residual_df"], b["residual_df"])
+        for kind in ("main", "interaction", "curvature"):
+            # R writes NA as null; the tool writes None when the model has no such term.
+            if a[kind] is None or b.get(kind) is None:
+                comparison.check(case, f"power {kind} present", a[kind] is None, b.get(kind) is None)
+            else:
+                comparison.check(case, f"power {kind}", float(a[kind]), float(b[kind]), tol=1e-6)
+
+
 def check_dsd(ours: list[dict], comparison: Comparison) -> None:
     """No R reference is installed, so check the published defining properties."""
     for entry in ours:
@@ -142,9 +156,10 @@ def main() -> int:
             ("Fractional factorials vs FrF2", "fractional", compare_fractional),
             ("Box-Behnken vs rsm::bbd", "box_behnken", compare_box_behnken),
             ("Central composite vs rsm::ccd", "central_composite", compare_central_composite),
+            ("Power per term vs R (model.matrix + pt)", "power", compare_power),
         ):
             comparison = Comparison()
-            fn(ours[key], theirs[key], comparison)
+            fn(ours.get(key, []), theirs.get(key, []), comparison)
             comparison.report(title)
             overall.append(comparison)
 

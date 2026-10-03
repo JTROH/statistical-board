@@ -32,3 +32,17 @@ CENTRAL_COMPOSITE_CASES: list[tuple[int, str]] = [
 # 2m+1 runs, three levels, and main effects orthogonal to every two-factor
 # interaction.
 DSD_CASES: list[int] = [4, 5, 6, 7, 8]
+
+# Power per kind of model term: (family, n_factors, n_center, model_order,
+# standardised target effect). R builds each design itself (expand.grid,
+# rsm::ccd, rsm::bbd), its own model matrix and its own non-central t, so the
+# only thing shared with the tool is the convention: a main or interaction
+# coefficient is half the target effect, a curvature coefficient is all of it.
+POWER_CASES: list[tuple[str, int, int, str, float]] = [
+    ("full", 3, 3, "interaction", 2.0),
+    ("full", 4, 3, "interaction", 1.5),
+    ("ccd-face", 3, 3, "quadratic", 2.0),
+    ("ccd-face", 2, 4, "quadratic", 1.5),
+    ("bbd", 3, 3, "quadratic", 2.0),
+    ("bbd", 4, 3, "quadratic", 2.0),
+]

@@ -56,6 +56,10 @@ one-off script for what these already compute deterministically):
   rerun.
 - `vif --formula "..."` — variance inflation factor per term; flags
   collinearity/confounding between predictors.
+- `box-cox --formula "..."` — best power transform of the response, with a CI
+  (0 inside = log is supported; 1 inside = no transform needed). Report it for
+  any positive response such as a titre. `regression` output also carries
+  `lack_of_fit` and a Breusch-Pagan check — report both.
 - `design-coverage --factor F1 --factor F2 [--value COL]` — how many of the
   factors' possible level combinations were actually run, replicate counts, and
   (with `--value`) a curvature contrast if center-point runs are present.

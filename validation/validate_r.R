@@ -95,6 +95,59 @@ central_composite <- lapply(ccd_cases, function(case) {
   )
 })
 
+# ---------------------------------------------------------------------------
+# Power per kind of model term
+# ---------------------------------------------------------------------------
+# Same cases as POWER_CASES in cases.py. Design, model matrix and power are all
+# built here, independently of the tool.
+
+power_cases <- list(
+  list(family = "full", k = 3, nc = 3, order = "interaction", effect = 2.0),
+  list(family = "full", k = 4, nc = 3, order = "interaction", effect = 1.5),
+  list(family = "ccd-face", k = 3, nc = 3, order = "quadratic", effect = 2.0),
+  list(family = "ccd-face", k = 2, nc = 4, order = "quadratic", effect = 1.5),
+  list(family = "bbd", k = 3, nc = 3, order = "quadratic", effect = 2.0),
+  list(family = "bbd", k = 4, nc = 3, order = "quadratic", effect = 2.0)
+)
+
+power <- lapply(power_cases, function(case) {
+  k <- case$k
+  vars <- paste0("x", seq_len(k))
+  pts <- if (case$family == "full") {
+    g <- expand.grid(rep(list(c(-1, 1)), k)); names(g) <- vars
+    rbind(g, as.data.frame(matrix(0, case$nc, k, dimnames = list(NULL, vars))))
+  } else if (case$family == "ccd-face") {
+    d <- ccd(k, n0 = c(case$nc, 0), alpha = "faces", randomize = FALSE, oneblock = TRUE)
+    as.data.frame(d)[, vars]
+  } else {
+    d <- bbd(k, n0 = case$nc, randomize = FALSE, block = FALSE)
+    as.data.frame(d)[, vars]
+  }
+  pts <- as.data.frame(lapply(pts, as.numeric))
+  rhs <- paste0("(", paste(vars, collapse = " + "), ")^2")
+  if (case$order == "quadratic") rhs <- paste(rhs, "+", paste0("I(", vars, "^2)", collapse = " + "))
+  X <- model.matrix(as.formula(paste("~", rhs)), pts)
+  V <- solve(crossprod(X))
+  df <- nrow(X) - ncol(X)
+  crit <- qt(0.975, df)
+  pw <- function(ncp) pt(crit, df, ncp, lower.tail = FALSE) + pt(-crit, df, ncp)
+  se <- sqrt(diag(V))
+  cols <- colnames(X)
+  kind <- ifelse(cols %in% vars, "main", ifelse(grepl("^I\\(", cols), "curvature",
+                 ifelse(grepl(":", cols), "interaction", "intercept")))
+  coef <- ifelse(kind == "curvature", case$effect, case$effect / 2)
+  powers <- pw(coef / se)
+  min_of <- function(k) if (any(kind == k)) min(powers[kind == k]) else NA
+  list(
+    case = sprintf("power-%s-%d-c%d-%s", case$family, k, case$nc, case$order),
+    n_runs = nrow(X),
+    residual_df = df,
+    main = min_of("main"),
+    interaction = min_of("interaction"),
+    curvature = min_of("curvature")
+  )
+})
+
 payload <- list(
   source = "R",
   r_version = paste(R.version$major, R.version$minor, sep = "."),
@@ -102,7 +155,8 @@ payload <- list(
                   rsm = as.character(packageVersion("rsm"))),
   fractional = fractional,
   box_behnken = box_behnken,
-  central_composite = central_composite
+  central_composite = central_composite,
+  power = power
 )
 
 write(toJSON(payload, auto_unbox = TRUE, digits = 12),

@@ -159,6 +159,7 @@ def spec_from_dict(payload: dict) -> DesignSpec:
         max_runs=None if max_runs is None else int(max_runs),
         n_center_points=3 if centre is None else max(int(centre), 0),
         expected_run_losses=1 if losses is None else max(int(losses), 0),
+        hard_ranges=bool(payload.get("hard_ranges", False)),
     )
 
 
@@ -181,6 +182,7 @@ def spec_to_dict(spec: DesignSpec) -> dict:
         "max_runs": spec.max_runs,
         "n_center_points": spec.n_center_points,
         "expected_run_losses": spec.expected_run_losses,
+        "hard_ranges": spec.hard_ranges,
     }
 
 

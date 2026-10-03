@@ -144,6 +144,12 @@ class DesignSpec:
     # How many runs the scientist thinks could plausibly be lost (failed
     # bioreactors, contamination). Drives the robustness axis.
     expected_run_losses: int = 1
+    # True when the declared ranges are limits, not just the region of
+    # interest — e.g. a harvest window the process cannot go outside. Designs
+    # with runs outside them (rotatable axial points) are then disqualified
+    # rather than merely flagged, because no scoring axis can see a fixed
+    # operating window.
+    hard_ranges: bool = False
 
     def __post_init__(self) -> None:
         if len(self.factors) < 2:

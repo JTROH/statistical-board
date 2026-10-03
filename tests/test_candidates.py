@@ -227,3 +227,28 @@ def test_options_are_all_viable():
 def test_impossible_budget_yields_no_options_rather_than_a_bad_one():
     options = top_options(make_spec(order=ModelOrder.QUADRATIC, max_runs=6))
     assert options == []
+
+
+def test_hard_ranges_disqualify_designs_with_runs_outside_them():
+    """Rotatable CCD axial points leave the declared cube. With hard limits on,
+    that design must not be offered, let alone recommended."""
+    spec = make_spec(order=ModelOrder.QUADRATIC, k=3, max_runs=20, losses=1)
+    soft = {s.design.name: s for s in score_candidates(spec)}
+    rotatable = [n for n in soft if "rotatable" in n]
+    assert rotatable and all(soft[n].is_viable for n in rotatable)
+
+    spec.hard_ranges = True
+    hard = {s.design.name: s for s in score_candidates(spec)}
+    for name in rotatable:
+        assert not hard[name].is_viable
+        assert "hard limits" in hard[name].disqualified
+    assert all("rotatable" not in s.design.name for s in top_options(spec))
+
+
+def test_hard_ranges_round_trip_through_the_form():
+    from doe_advisor.intake import spec_from_dict, spec_to_dict
+
+    spec = make_spec(k=3)
+    spec.hard_ranges = True
+    assert spec_from_dict(spec_to_dict(spec)).hard_ranges is True
+    assert spec_from_dict({**spec_to_dict(spec), "hard_ranges": False}).hard_ranges is False

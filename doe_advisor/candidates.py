@@ -64,7 +64,7 @@ class ScoredDesign:
     def meets_thresholds(self) -> bool:
         if not self.is_viable:
             return False
-        power = self.properties.power.min_main_effect_power
+        power = self.properties.power.min_power
         if power is not None and power < DEFAULT_MIN_POWER:
             return False
         return self.properties.aliasing.worst_main_effect_alias <= MAX_ACCEPTABLE_ALIAS
@@ -155,7 +155,7 @@ def _sub_scores(props: DesignProperties, best_i_value: float) -> tuple[dict[str,
     scores: dict[str, float] = {}
     weights: dict[str, float] = {}
 
-    power = props.power.min_main_effect_power
+    power = props.power.min_power
     if power is not None:
         scores["power"] = float(power)
         weights["power"] = AXIS_WEIGHTS["power"]
@@ -210,6 +210,8 @@ def score_candidates(spec: DesignSpec, designs: list[Design] | None = None, seed
             entry.disqualified = "saturated: no degrees of freedom left to estimate uncertainty"
         elif spec.max_runs is not None and props.n_runs > spec.max_runs:
             entry.disqualified = f"needs {props.n_runs} runs, over your budget of {spec.max_runs}"
+        elif spec.hard_ranges and props.prediction.axial_points_outside_range:
+            entry.disqualified = "has runs outside the ranges you marked as hard limits"
 
         if entry.is_viable:
             entry.sub_scores, entry.weights = _sub_scores(props, best_i)

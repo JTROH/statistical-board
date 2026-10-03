@@ -140,9 +140,42 @@ def _solve_ncp_for_power(target: float, df: int, alpha: float) -> float:
     return (lo + hi) / 2.0
 
 
+# How ``target_effect`` maps onto each kind of coded coefficient. Printed in the
+# memo, because the curvature rule is a choice and power for a squared term
+# moves by a factor of several depending on it.
+#
+# - main effect b*x: the change from low to high is 2b, so b = target / 2.
+# - interaction c*x1*x2: the classical interaction effect is 2c, so c = target / 2.
+# - curvature q*x^2: the rise or dip from the centre to either edge of the
+#   declared range is q, so q = target.
+CURVATURE_RULE = (
+    "For a curvature (squared) term, the target effect is read as the rise or dip from the "
+    "centre of a factor's range to its edge, with the other factors at their centre."
+)
+
+
+def term_kind(term: tuple) -> str:
+    """``main``, ``interaction`` or ``curvature``."""
+    if len(term) == 1:
+        return "main"
+    if len(term) == 2 and term[0] == term[1]:
+        return "curvature"
+    return "interaction"
+
+
+def _coefficient_per_target(term: tuple) -> float:
+    """Coded coefficient produced by a target effect of 1, for this kind of term."""
+    return 1.0 if term_kind(term) == "curvature" else 0.5
+
+
 @dataclass
 class PowerReport:
-    """Power to detect the target effect, per main effect.
+    """Power to detect the target effect, for every term in the model.
+
+    ``per_term`` holds the main effects; ``interaction_terms`` and
+    ``curvature_terms`` hold the rest. The headline (``min_power``) is the
+    weakest term the scientist asked the model to estimate — a quadratic model
+    for finding an optimum is only as good as its curvature estimates.
 
     ``None`` values mean the scientist did not supply a target effect and a
     noise estimate, so power is genuinely unknown — the tool says so rather
@@ -150,21 +183,42 @@ class PowerReport:
     """
 
     per_term: dict[str, float] = field(default_factory=dict)
+    interaction_terms: dict[str, float] = field(default_factory=dict)
+    curvature_terms: dict[str, float] = field(default_factory=dict)
     residual_df: int = 0
     saturated: bool = False
     standardised_effect: float | None = None
-    detectable_effect_sd: float | None = None  # effect (in SDs) detectable at 80%
+    # Effect (in SDs) detectable at 80% on the *weakest* model term, so it agrees
+    # with ``min_power`` about which side of 80% the target falls.
+    detectable_effect_sd: float | None = None
     # The same figure in the response's own units — only when a noise SD was given.
     detectable_effect_units: float | None = None
-    # Power for the weakest main effect if the true noise SD is 1.5x what was
+    # Power for the weakest model term if the true noise SD is 1.5x what was
     # entered. A noise guess is the input scientists are least sure of, and this
     # is what it costs to be wrong by half.
     min_power_if_noise_1_5x: float | None = None
 
+    @staticmethod
+    def _min(values: dict[str, float]) -> float | None:
+        finite = [v for v in values.values() if not np.isnan(v)]
+        return min(finite) if finite else None
+
     @property
     def min_main_effect_power(self) -> float | None:
-        values = [v for v in self.per_term.values() if not np.isnan(v)]
-        return min(values) if values else None
+        return self._min(self.per_term)
+
+    @property
+    def min_interaction_power(self) -> float | None:
+        return self._min(self.interaction_terms)
+
+    @property
+    def min_curvature_power(self) -> float | None:
+        return self._min(self.curvature_terms)
+
+    @property
+    def min_power(self) -> float | None:
+        """The weakest term in the model: the headline power figure."""
+        return self._min({**self.per_term, **self.interaction_terms, **self.curvature_terms})
 
 
 @dataclass
@@ -229,12 +283,29 @@ def power_curve(spec: DesignSpec, up_to: int, target: float = 0.80) -> PowerCurv
     return curve
 
 
+def _min_term_power(matrix: np.ndarray, terms: list, std_effect: float, alpha: float) -> float | None:
+    """Weakest-term power, without the rest of :func:`power_report`.
+
+    The robustness check calls this once per loss scenario, so it skips the
+    detectable-effect bisection that ``power_report`` does.
+    """
+    df = residual_df(matrix, terms)
+    if df <= 0:
+        return None
+    x = model_matrix(matrix, terms)
+    diag = np.diag(np.linalg.inv(x.T @ x))
+    # Power rises with the non-centrality parameter, so the weakest term is the
+    # one with the smallest — one t-distribution call instead of one per term.
+    ncp = min(std_effect * _coefficient_per_target(t) / float(np.sqrt(diag[j])) for j, t in enumerate(terms) if t)
+    return _power_for_ncp(ncp, df, alpha)
+
+
 def power_report(design: Design, spec: DesignSpec) -> PowerReport:
-    """Power for each main effect at the scientist's stated target effect.
+    """Power for every model term at the scientist's stated target effect.
 
     Convention: ``target_effect`` is the change in the response across a
-    factor's full low-to-high range, so the corresponding coded coefficient is
-    half of it.
+    factor's full low-to-high range, so a main-effect coded coefficient is half
+    of it. Interactions and curvature follow :data:`CURVATURE_RULE`.
     """
     terms = model_terms(design.n_factors, spec.model_order)
     df = residual_df(design.matrix, terms)
@@ -250,24 +321,28 @@ def power_report(design: Design, spec: DesignSpec) -> PowerReport:
     std_effect = response.standardised_effect if response else None
     report.standardised_effect = std_effect
 
-    # Effect detectable at 80% power, using the best-estimated main effect.
-    # Reported in standard deviations, so it stays meaningful even when the
-    # scientist has not yet committed to a target effect size.
-    main_positions = [terms.index((i,)) for i in range(design.n_factors)]
-    best_se = min(float(np.sqrt(inv[j, j])) for j in main_positions)
+    # Effect detectable at 80% power on the weakest term. Reported in standard
+    # deviations, so it stays meaningful even when the scientist has not yet
+    # committed to a target effect size.
+    model = [(j, t) for j, t in enumerate(terms) if t]
     ncp_80 = _solve_ncp_for_power(0.80, df, spec.alpha)
-    report.detectable_effect_sd = float(2.0 * ncp_80 * best_se)
+    report.detectable_effect_sd = float(
+        max(ncp_80 * float(np.sqrt(inv[j, j])) / _coefficient_per_target(t) for j, t in model)
+    )
     if response is not None and response.noise_sd:
         report.detectable_effect_units = report.detectable_effect_sd * abs(response.noise_sd)
 
     if std_effect is not None:
+        buckets = {
+            "main": report.per_term,
+            "interaction": report.interaction_terms,
+            "curvature": report.curvature_terms,
+        }
         pessimistic: list[float] = []
-        for i in range(design.n_factors):
-            j = terms.index((i,))
-            se = float(np.sqrt(inv[j, j]))
-            ncp = (std_effect / 2.0) / se
-            label = term_label((i,), spec.factor_names)
-            report.per_term[label] = _power_for_ncp(ncp, df, spec.alpha)
+        for j, term in model:
+            ncp = std_effect * _coefficient_per_target(term) / float(np.sqrt(inv[j, j]))
+            label = term_label(term, spec.factor_names)
+            buckets[term_kind(term)][label] = _power_for_ncp(ncp, df, spec.alpha)
             pessimistic.append(_power_for_ncp(ncp / 1.5, df, spec.alpha))
         report.min_power_if_noise_1_5x = min(pessimistic)
 
@@ -336,6 +411,11 @@ class RobustnessReport:
     n_scenarios: int = 0
     fraction_estimable: float = 1.0
     worst_d_ratio: float = 1.0  # worst D-efficiency relative to the intact design
+    # Weakest-term power in the worst loss scenario that can still be fitted.
+    # "Still estimable" is not "still answers the question": losing one run
+    # from a 17-run CCD can keep every term while cutting power by a quarter.
+    # ``None`` when no target effect was given or no scenario survives.
+    worst_power_after_loss: float | None = None
     exhaustive: bool = True
     # False when the question does not apply: the intact design already cannot
     # fit the model, or the scientist expects to lose no runs. Reporting "100%
@@ -354,6 +434,8 @@ def robustness_report(design: Design, spec: DesignSpec, seed: int = 0) -> Robust
         return RobustnessReport(n_losses=r, n_scenarios=0, fraction_estimable=0.0, applicable=False)
 
     base_d = d_efficiency(design.matrix, terms)
+    response = spec.primary_response
+    std_effect = response.standardised_effect if response else None
     n = design.n_runs
     all_idx = np.arange(n)
 
@@ -374,12 +456,17 @@ def robustness_report(design: Design, spec: DesignSpec, seed: int = 0) -> Robust
 
     n_ok = 0
     worst_ratio = 1.0
+    powers: list[float] = []
     for lost in scenarios:
         kept = design.matrix[np.setdiff1d(all_idx, lost)]
         if is_estimable(kept, terms):
             n_ok += 1
             if base_d > 0:
                 worst_ratio = min(worst_ratio, d_efficiency(kept, terms) / base_d)
+            if std_effect is not None:
+                power = _min_term_power(kept, terms, std_effect, spec.alpha)
+                if power is not None:
+                    powers.append(power)
         else:
             worst_ratio = 0.0
 
@@ -389,6 +476,7 @@ def robustness_report(design: Design, spec: DesignSpec, seed: int = 0) -> Robust
         fraction_estimable=n_ok / len(scenarios),
         worst_d_ratio=float(worst_ratio),
         exhaustive=exhaustive,
+        worst_power_after_loss=min(powers) if powers else None,
     )
 
 

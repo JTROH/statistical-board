@@ -16,10 +16,10 @@ import numpy as np
 
 from doe_advisor.designs import classical as C
 from doe_advisor.designs.model import model_matrix, model_terms
-from doe_advisor.designs.properties import d_efficiency
-from doe_advisor.designs.spec import ModelOrder
+from doe_advisor.designs.properties import d_efficiency, power_report
+from doe_advisor.designs.spec import DesignSpec, Factor, ModelOrder, Response
 
-from .cases import BOX_BEHNKEN_CASES, CENTRAL_COMPOSITE_CASES, DSD_CASES, FRACTIONAL_CASES
+from .cases import BOX_BEHNKEN_CASES, CENTRAL_COMPOSITE_CASES, DSD_CASES, FRACTIONAL_CASES, POWER_CASES
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -108,6 +108,34 @@ def dsd_results() -> list[dict]:
     return out
 
 
+def power_results() -> list[dict]:
+    out = []
+    for family, k, nc, order, effect in POWER_CASES:
+        if family == "full":
+            design = C.full_factorial(k, n_center=nc)
+        elif family == "ccd-face":
+            design = C.central_composite(k, alpha="face", n_center=nc)
+        else:
+            design = C.box_behnken(k, n_center=nc)
+        spec = DesignSpec(
+            factors=[Factor(f"x{i + 1}", -1.0, 1.0) for i in range(k)],
+            responses=[Response("y", target_effect=effect, noise_sd=1.0)],
+            model_order=ModelOrder(order),
+        )
+        report = power_report(design, spec)
+        out.append(
+            {
+                "case": f"power-{family}-{k}-c{nc}-{order}",
+                "n_runs": design.n_runs,
+                "residual_df": report.residual_df,
+                "main": report.min_main_effect_power,
+                "interaction": report.min_interaction_power,
+                "curvature": report.min_curvature_power,
+            }
+        )
+    return out
+
+
 def main() -> int:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -116,6 +144,7 @@ def main() -> int:
         "box_behnken": box_behnken_results(),
         "central_composite": central_composite_results(),
         "dsd": dsd_results(),
+        "power": power_results(),
     }
     path = RESULTS_DIR / "tool.json"
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

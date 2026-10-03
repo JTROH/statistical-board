@@ -20,7 +20,7 @@ import numpy as np
 
 from . import __version__, figures
 from .candidates import AXIS_WEIGHTS, DEFAULT_MIN_POWER, ScoredDesign, top_options
-from .designs.properties import PowerCurve, power_curve
+from .designs.properties import CURVATURE_RULE, PowerCurve, power_curve
 from .designs.spec import DesignSpec
 from .narrate import Narration, get_narrator
 
@@ -111,13 +111,15 @@ def _comparison_table(options: list[ScoredDesign]) -> str:
     rows = []
     for option in options:
         props = option.properties
-        power = props.power.min_main_effect_power
+        power = props.power.min_power
         role = ROLE_LABEL.get(option.roles[0] if option.roles else "", "Alternative")
         alias = props.aliasing.worst_main_effect_alias
         alias_text = "none" if alias == 0 else ("complete" if alias >= 0.99 else f"partial ({alias:.2f})")
         robust = (
             f"{props.robustness.fraction_estimable:.0%}" if props.robustness.applicable else "—"
         )
+        if props.robustness.worst_power_after_loss is not None:
+            robust += f" (power then ≥ {props.robustness.worst_power_after_loss:.0%})"
         rows.append(
             f"| **{role}** — {option.design.name} | {option.n_runs} | "
             f"{'—' if power is None else f'{power:.0%}'} | {alias_text} | "
@@ -160,16 +162,26 @@ def _power_primer(
         "design would find at 80% power. If it is bigger than the change you care about, the design is too "
         "small for your question.",
         "",
-        "| Option | Runs | Smallest change seen at 80% power | Power at your target | Power if noise is 1.5× |",
-        "|---|---|---|---|---|",
+        "| Option | Runs | Smallest change seen at 80% power | Main effects | Interactions | Curvature "
+        "| Weakest term | Weakest if noise is 1.5× |",
+        "|---|---|---|---|---|---|---|---|",
     ]
+
+    def pct(value: float | None) -> str:
+        return "—" if value is None else f"{value:.0%}"
+
     for option in options:
         pw = option.properties.power
         seen = "—" if pw.detectable_effect_units is None else f"{pw.detectable_effect_units:.3g}{units}"
-        power = "—" if pw.min_main_effect_power is None else f"{pw.min_main_effect_power:.0%}"
-        worse = "—" if pw.min_power_if_noise_1_5x is None else f"{pw.min_power_if_noise_1_5x:.0%}"
-        lines.append(f"| {option.design.name} | {option.n_runs} | {seen} | {power} | {worse} |")
+        lines.append(
+            f"| {option.design.name} | {option.n_runs} | {seen} | {pct(pw.min_main_effect_power)} | "
+            f"{pct(pw.min_interaction_power)} | {pct(pw.min_curvature_power)} | {pct(pw.min_power)} | "
+            f"{pct(pw.min_power_if_noise_1_5x)} |"
+        )
     lines += [
+        "",
+        "*Power is shown for every kind of term in the model; the score uses the weakest. "
+        f"{CURVATURE_RULE} A blank (—) means the model has no terms of that kind.*",
         "",
         "*The last column is the cost of guessing the noise too low. A noise SD taken from two or three "
         "repeats is easily off by half; one from centre points of a past study, or from many batches at the "

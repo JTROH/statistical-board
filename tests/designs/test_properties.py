@@ -25,7 +25,7 @@ from doe_advisor.designs.properties import (
     robustness_report,
     scaled_prediction_variance,
 )
-from doe_advisor.designs.spec import DesignSpec, Factor, ModelOrder, Response
+from doe_advisor.designs.spec import Design, DesignSpec, Factor, ModelOrder, Response
 
 
 def make_spec(k=4, order=ModelOrder.INTERACTION, target=0.5, noise=0.25, losses=2):
@@ -326,3 +326,101 @@ def test_evaluate_flags_an_unfittable_design_consistently():
     assert props.d_efficiency == 0.0
     assert props.aliasing.estimable is False
     assert props.robustness.applicable is False
+
+
+# --------------------------------------------------------------------------
+# Power for every model term, not just the main effects
+# --------------------------------------------------------------------------
+
+
+def _ccd_quadratic_spec():
+    """Face-centred CCD, 3 factors, 3 centre points (17 runs), target = 2 SD."""
+    factors = [Factor(f"x{i}", -1.0, 1.0) for i in range(3)]
+    responses = [Response("titer", target_effect=2.0, noise_sd=1.0)]
+    return DesignSpec(factors=factors, responses=responses, model_order=ModelOrder.QUADRATIC, expected_run_losses=1)
+
+
+def _independent_power(design, spec, column, coefficient):
+    """Power for one coded coefficient, via statsmodels-free plain algebra."""
+    x0 = design.matrix
+    cols = [np.ones(len(x0))] + [x0[:, i] for i in range(3)]
+    cols += [x0[:, 0] * x0[:, 1], x0[:, 0] * x0[:, 2], x0[:, 1] * x0[:, 2]]
+    cols += [x0[:, i] ** 2 for i in range(3)]
+    x = np.column_stack(cols)
+    se = np.sqrt(np.linalg.inv(x.T @ x)[column, column])
+    df = len(x0) - x.shape[1]
+    crit = stats.t.ppf(0.975, df)
+    ncp = coefficient / se
+    return stats.nct.sf(crit, df, ncp) + stats.nct.cdf(-crit, df, ncp)
+
+
+def test_power_is_reported_for_interactions_and_curvature():
+    spec = _ccd_quadratic_spec()
+    design = C.central_composite(3, alpha="face", n_center=3)
+    report = power_report(design, spec)
+
+    assert len(report.per_term) == 3
+    assert len(report.interaction_terms) == 3
+    assert len(report.curvature_terms) == 3
+    # Main and interaction coefficients are half the target; curvature is the
+    # whole target (centre-to-edge rise), see CURVATURE_RULE.
+    assert report.min_main_effect_power == pytest.approx(_independent_power(design, spec, 1, 1.0), abs=1e-6)
+    assert report.min_interaction_power == pytest.approx(_independent_power(design, spec, 4, 1.0), abs=1e-6)
+    assert report.min_curvature_power == pytest.approx(_independent_power(design, spec, 7, 2.0), abs=1e-6)
+
+
+def test_headline_power_is_the_weakest_term():
+    """The 17-run face-centred CCD: main effects look fine at 77%, but the
+    interactions are at 68% — and the headline must say 68%."""
+    report = power_report(C.central_composite(3, alpha="face", n_center=3), _ccd_quadratic_spec())
+    assert report.min_main_effect_power == pytest.approx(0.774, abs=1e-3)
+    assert report.min_interaction_power == pytest.approx(0.681, abs=1e-3)
+    assert report.min_power == pytest.approx(report.min_interaction_power)
+
+
+def test_detectable_effect_agrees_with_the_weakest_term():
+    """Unequal SEs across terms: the detectable effect must be the one the
+    weakest term needs, or it will claim margin the headline power denies."""
+    spec = _ccd_quadratic_spec()
+    design = C.central_composite(3, alpha="face", n_center=3)
+    report = power_report(design, spec)
+    assert (report.min_power >= 0.80) == (2.0 >= report.detectable_effect_sd)
+    at_detectable = DesignSpec(
+        factors=spec.factors,
+        responses=[Response("titer", target_effect=report.detectable_effect_sd, noise_sd=1.0)],
+        model_order=spec.model_order,
+    )
+    assert power_report(design, at_detectable).min_power == pytest.approx(0.80, abs=1e-3)
+
+
+def test_main_effects_model_has_no_interaction_or_curvature_power():
+    report = power_report(C.full_factorial(3, n_center=3), make_spec(k=3, order=ModelOrder.MAIN))
+    assert report.interaction_terms == {}
+    assert report.curvature_terms == {}
+    assert report.min_power == report.min_main_effect_power
+
+
+# --------------------------------------------------------------------------
+# Robustness: still estimable is not still powered
+# --------------------------------------------------------------------------
+
+
+def test_robustness_reports_power_after_losing_a_run():
+    spec = _ccd_quadratic_spec()
+    design = C.central_composite(3, alpha="face", n_center=3)
+    intact = power_report(design, spec).min_power
+    report = robustness_report(design, spec)
+    assert report.fraction_estimable == 1.0
+    assert report.worst_power_after_loss is not None
+    assert report.worst_power_after_loss < intact
+    # Brute force: drop each run, take the weakest term, take the worst case.
+    worst = 1.0
+    for i in range(design.n_runs):
+        kept = Design(design.name, design.family, np.delete(design.matrix, i, axis=0), design.factor_names)
+        worst = min(worst, power_report(kept, spec).min_power)
+    assert report.worst_power_after_loss == pytest.approx(worst, abs=1e-9)
+
+
+def test_robustness_power_after_loss_is_none_without_a_target_effect():
+    spec = make_spec(k=3, target=None, losses=1)
+    assert robustness_report(C.full_factorial(3, n_center=3), spec).worst_power_after_loss is None

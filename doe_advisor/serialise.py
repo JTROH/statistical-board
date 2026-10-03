@@ -12,7 +12,7 @@ from __future__ import annotations
 def serialise_option(option) -> dict:
     """One :class:`~doe_advisor.candidates.ScoredDesign` as a JSON-safe dict."""
     props = option.properties
-    power = props.power.min_main_effect_power
+    power = props.power.min_power
     return {
         "name": option.design.name,
         "family": option.design.family,
@@ -26,6 +26,14 @@ def serialise_option(option) -> dict:
         "weights": {k: round(v, 4) for k, v in option.weights.items()},
         "score_explanation": option.score_explanation(),
         "power": None if power is None else round(power, 4),
+        "power_by_kind": {
+            kind: None if value is None else round(value, 4)
+            for kind, value in (
+                ("main", props.power.min_main_effect_power),
+                ("interaction", props.power.min_interaction_power),
+                ("curvature", props.power.min_curvature_power),
+            )
+        },
         "detectable_effect_sd": props.power.detectable_effect_sd,
         "detectable_effect_units": props.power.detectable_effect_units,
         "power_if_noise_1_5x": (
@@ -39,6 +47,11 @@ def serialise_option(option) -> dict:
         "fds_curve": props.prediction.fds_curve,
         "robustness_applicable": props.robustness.applicable,
         "robustness": round(props.robustness.fraction_estimable, 4),
+        "worst_power_after_loss": (
+            None
+            if props.robustness.worst_power_after_loss is None
+            else round(props.robustness.worst_power_after_loss, 4)
+        ),
         "exceeds_declared_range": props.prediction.axial_points_outside_range,
         "detail": {k: v for k, v in option.design.detail.items() if k != "defining_relation"},
     }

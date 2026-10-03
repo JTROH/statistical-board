@@ -97,6 +97,7 @@ function readForm() {
     max_runs: numOrNull($("max-runs").value),
     n_center_points: numOrNull($("centre").value),
     expected_run_losses: numOrNull($("losses").value),
+    hard_ranges: $("hard-ranges").checked,
     title: named.length
       ? `Design options: ${named.map((f) => f.name).join(", ")}`
       : "Experimental design memo",
@@ -118,6 +119,7 @@ function writeForm(form) {
   if (form.max_runs != null) $("max-runs").value = form.max_runs;
   if (form.n_center_points != null) $("centre").value = form.n_center_points;
   if (form.expected_run_losses != null) $("losses").value = form.expected_run_losses;
+  $("hard-ranges").checked = Boolean(form.hard_ranges);
   updateModelNote();
   updateEffectNote();
 }
@@ -203,6 +205,14 @@ function prosAndCons(option, cheapest, dearest, basis) {
     else if (option.power >= 0.8) pros.push(`Adequate power (${p}%), just over the 80% bar — about ${100 - p} campaigns in 100 would still miss a real effect.`);
     else cons.push(`Underpowered (${p}%): if the effect is real, about ${100 - p} campaigns in 100 would miss it — you could run everything and conclude nothing.`);
 
+    const byKind = option.power_by_kind || {};
+    [["curvature", "curvature (squared) terms"], ["interaction", "interactions"]].forEach(([kind, words]) => {
+      const v = byKind[kind];
+      if (v != null && v < 0.8 && byKind.main != null && v < byKind.main) {
+        cons.push(`The ${words} are the weak point: ${Math.round(v * 100)}% power, against ${Math.round(byKind.main * 100)}% for the main effects.`);
+      }
+    });
+
     if (option.detectable_effect_units != null && basis && basis.target_effect != null) {
       const seen = sig(option.detectable_effect_units);
       if (option.power >= 0.8) {
@@ -240,6 +250,8 @@ function prosAndCons(option, cheapest, dearest, basis) {
   if (option.residual_df <= 2) cons.push(`Only ${option.residual_df} degrees of freedom for error — wide error bars.`);
   if (option.robustness_applicable && option.robustness < 1) {
     cons.push(`Fragile: fails in ${pct(1 - option.robustness)} of run-loss scenarios.`);
+  } else if (option.robustness_applicable && option.worst_power_after_loss != null && option.worst_power_after_loss < 0.8) {
+    cons.push(`Still fits after the run losses you expect, but power can fall to ${pct(option.worst_power_after_loss)}.`);
   } else if (option.robustness_applicable) {
     pros.push("Survives the run losses you expect.");
   }

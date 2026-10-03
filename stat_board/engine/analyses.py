@@ -431,11 +431,105 @@ def _fit_and_anova(path: str, formula: str, *, typ: int = 2, alpha: float = 0.05
         w, p = stats.shapiro(resid)
         diagnostics.update(resid_shapiro_W=float(w), resid_shapiro_p=float(p),
                            resid_normal_at_alpha=bool(p > alpha))
+    exog = np.asarray(model.model.exog, float)
+    if exog.shape[1] > 1 and len(resid) > exog.shape[1]:
+        from statsmodels.stats.diagnostic import het_breuschpagan
+
+        _, _, bp_f, bp_p = het_breuschpagan(resid, exog)
+        diagnostics.update(breusch_pagan_F=float(bp_f), breusch_pagan_p=float(bp_p),
+                           constant_variance_at_alpha=bool(bp_p > alpha))
     return {
         "formula": formula, "typ": typ, "n": int(model.nobs),
         "r_squared": float(model.rsquared), "adj_r_squared": float(model.rsquared_adj),
         "f_pvalue": float(model.f_pvalue), "aic": float(model.aic), "bic": float(model.bic),
         "anova": terms, "coefficients": coefs, "residual_diagnostics": diagnostics,
+        "lack_of_fit": _lack_of_fit(model, alpha),
+    }
+
+
+def _lack_of_fit(model, alpha: float) -> dict[str, Any] | None:
+    """Lack-of-fit F test: does the model's residual scatter exceed the scatter
+    between true replicates (runs with identical settings)?
+
+    Needs replicated settings (e.g. centre points) for pure error, and more
+    distinct settings than model parameters. Returns ``None`` when either is
+    missing — the test cannot be done, which is not the same as passing it.
+    A significant result means the model shape is wrong (missing curvature or
+    interaction), not that the noise is large.
+    """
+    exog = np.round(np.asarray(model.model.exog, float), 9)
+    endog = np.asarray(model.model.endog, float)
+    n, p = exog.shape
+    _, group = np.unique(exog, axis=0, return_inverse=True)
+    group = np.asarray(group).ravel()
+    n_settings = int(group.max()) + 1
+    df_pe, df_lof = n - n_settings, n_settings - p
+    if df_pe <= 0 or df_lof <= 0:
+        return None
+    ss_pe = float(sum(((endog[group == g] - endog[group == g].mean()) ** 2).sum() for g in range(n_settings)))
+    ss_lof = float(model.ssr) - ss_pe
+    if ss_pe <= 0:
+        return None
+    f = (ss_lof / df_lof) / (ss_pe / df_pe)
+    p_value = float(stats.f.sf(f, df_lof, df_pe))
+    return {
+        "ss_lack_of_fit": ss_lof, "df_lack_of_fit": int(df_lof),
+        "ss_pure_error": ss_pe, "df_pure_error": int(df_pe),
+        "pure_error_sd": float(np.sqrt(ss_pe / df_pe)),
+        "F": float(f), "p": p_value, "lack_of_fit_at_alpha": bool(p_value < alpha),
+    }
+
+
+def box_cox(path: str, formula: str, *, alpha: float = 0.05) -> dict[str, Any]:
+    """Box-Cox profile for the response of a linear model: which power
+    transform y^lambda makes the model's residuals best behaved.
+
+    Returns the best lambda and its (1 - alpha) likelihood interval. Read it as:
+    1 inside the interval -> no transform needed; 0 inside -> a log scale is
+    supported (typical for titres, whose noise grows with the level).
+    The response must be strictly positive.
+    """
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    y = np.asarray(model.model.endog, float)
+    x = np.asarray(model.model.exog, float)
+    if np.any(y <= 0):
+        raise ValueError("Box-Cox needs a strictly positive response")
+    n = len(y)
+    log_gm = float(np.mean(np.log(y)))
+
+    def loglik(lam: float) -> float:
+        # Scaled by the geometric mean so residual sums of squares are comparable across lambda.
+        if abs(lam) < 1e-9:
+            z = np.exp(log_gm) * np.log(y)
+        else:
+            z = (y**lam - 1.0) / (lam * np.exp(log_gm * (lam - 1.0)))
+        beta, *_ = np.linalg.lstsq(x, z, rcond=None)
+        rss = float(((z - x @ beta) ** 2).sum())
+        return -0.5 * n * np.log(rss / n)
+
+    grid = np.round(np.arange(-3.0, 3.0 + 1e-9, 0.01), 2)
+    ll = np.array([loglik(lam) for lam in grid])
+    best = int(np.argmax(ll))
+    cut = ll[best] - 0.5 * stats.chi2.ppf(1.0 - alpha, 1)
+    inside = grid[ll >= cut]
+    low, high = float(inside.min()), float(inside.max())
+    if low <= 1.0 <= high:
+        advice = "1 is inside the interval: no transform is needed."
+    elif low <= 0.0 <= high:
+        advice = "0 is inside the interval and 1 is not: analyse the log of the response."
+    else:
+        advice = f"Neither 0 nor 1 is inside the interval: consider y^{grid[best]:g}."
+    return {
+        "analysis": "box_cox", "formula": formula, "n": n, "alpha": alpha,
+        "lambda": float(grid[best]), "ci": [low, high],
+        "includes_1": bool(low <= 1.0 <= high), "includes_0": bool(low <= 0.0 <= high),
+        "interval_hits_search_edge": bool(low <= grid[0] or high >= grid[-1]),
+        "advice": advice,
     }
 
 

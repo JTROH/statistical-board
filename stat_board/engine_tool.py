@@ -22,7 +22,7 @@ _GROUP_COMMANDS = {
 # Commands that run on the whole table by column name (multi-factor / standalone).
 _STANDALONE = {"regression", "two-way-anova", "ancova", "poisson", "negbin",
                "chisquare", "power", "correct",
-               "predict", "vif", "design-coverage", "doe-optimum"}
+               "predict", "vif", "box-cox", "design-coverage", "doe-optimum"}
 
 TOOL_NAME = "run_stat"
 
@@ -52,7 +52,11 @@ def build_tool() -> dict[str, Any]:
             "combination by predicted response, and flags whether the best setting sits "
             "at a factor's tested boundary — a real optimum may lie beyond the tested "
             "range). These four are the grounding for any 'recommended next experiment' "
-            "claim — never recommend a follow-up experiment without one of them."
+            "claim — never recommend a follow-up experiment without one of them. "
+            "regression/two-way-anova/ancova output also carries a lack_of_fit F test "
+            "(when replicated settings such as centre points exist) and a Breusch-Pagan "
+            "constant-variance check; box-cox (formula) gives the best power transform "
+            "of the response with a CI — use it before deciding between raw and log scale."
         ),
         "input_schema": {
             "type": "object",
@@ -70,7 +74,7 @@ def build_tool() -> dict[str, Any]:
                 "high": {"type": "number", "description": "tost: absolute upper equivalence bound."},
                 "method": {"type": "string", "description": "correlation: pearson|spearman|kendall. correct: fdr_bh|bonferroni|holm."},
                 "r": {"type": "number", "description": "bayes-ttest: Cauchy prior scale (default 0.707)."},
-                "formula": {"type": "string", "description": "regression/predict/vif/doe-optimum: "
+                "formula": {"type": "string", "description": "regression/predict/vif/box-cox/doe-optimum: "
                                                             "patsy formula, e.g. 'y ~ x1 + x2 + C(g)'."},
                 "value": {"type": "string", "description": "two-way-anova/ancova/design-coverage/"
                                                            "doe-optimum: numeric outcome column."},
@@ -167,6 +171,8 @@ def make_executor(
                 res = analyses.predict_table(data_path, inp["formula"], alpha=a)
             elif cmd == "vif":
                 res = analyses.vif_table(data_path, inp["formula"])
+            elif cmd == "box-cox":
+                res = analyses.box_cox(data_path, inp["formula"], alpha=a)
             elif cmd == "design-coverage":
                 res = analyses.design_coverage(data_path, inp["factors"], value=inp.get("value"))
             elif cmd == "doe-optimum":

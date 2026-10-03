@@ -67,7 +67,7 @@ def option_facts(option: ScoredDesign, spec: DesignSpec, cheapest: int, dearest:
     wrong design.
     """
     props = option.properties
-    power = props.power.min_main_effect_power
+    power = props.power.min_power
     detail = option.design.detail
 
     facts: dict = {
@@ -80,6 +80,9 @@ def option_facts(option: ScoredDesign, spec: DesignSpec, cheapest: int, dearest:
         "residual_df": props.residual_df,
         "score": round(option.score, 3),
         "min_power_pct": None if power is None else round(power * 100),
+        "main_power_pct": _pct(props.power.min_main_effect_power),
+        "interaction_power_pct": _pct(props.power.min_interaction_power),
+        "curvature_power_pct": _pct(props.power.min_curvature_power),
         "worst_alias": round(props.aliasing.worst_main_effect_alias, 2),
         "prediction_i_value": round(props.prediction.i_value, 2),
         "g_efficiency_pct": round(props.prediction.g_efficiency * 100),
@@ -106,7 +109,12 @@ def option_facts(option: ScoredDesign, spec: DesignSpec, cheapest: int, dearest:
     if props.robustness.applicable:
         facts["robust_pct"] = round(props.robustness.fraction_estimable * 100)
         facts["expected_losses"] = props.robustness.n_losses
+        facts["worst_power_pct_after_loss"] = _pct(props.robustness.worst_power_after_loss)
     return facts
+
+
+def _pct(value: float | None) -> int | None:
+    return None if value is None else round(value * 100)
 
 
 def _sig(value: float, digits: int = 3) -> float:
@@ -158,7 +166,7 @@ class TemplateNarrator:
         )
 
     def _headline(self, recommended: ScoredDesign, spec: DesignSpec) -> str:
-        power = recommended.properties.power.min_main_effect_power
+        power = recommended.properties.power.min_power
         clause = (
             f" and would detect the effect you care about about {round(power * 100)}% of the time"
             if power is not None
@@ -190,6 +198,22 @@ class TemplateNarrator:
                     f"Underpowered at about {pct}% — if the effect is real, about {100 - pct} campaigns in 100 "
                     f"would miss it. There is a real chance of running everything and concluding nothing."
                 )
+            # Say which kind of term is the weak one. "Main effects are fine but
+            # the curvature is not" is a different problem from "everything is
+            # weak", and it is the one an optimisation study usually has.
+            main_pct = f["main_power_pct"]
+            for kind, words in (("curvature", "curvature (squared) terms"), ("interaction", "interactions")):
+                kind_pct = f[f"{kind}_power_pct"]
+                if (
+                    kind_pct is not None
+                    and kind_pct < DEFAULT_MIN_POWER * 100
+                    and main_pct is not None
+                    and kind_pct < main_pct
+                ):
+                    cons.append(
+                        f"The {words} are the weak point: about {kind_pct}% power, against about {main_pct}% "
+                        f"for the main effects."
+                    )
             # The same fact in the scientist's units: what is the smallest
             # change this design can reliably see, and how does it compare with
             # the change they asked for?
@@ -276,7 +300,13 @@ class TemplateNarrator:
             )
 
         if "robust_pct" in f:
-            if f["robust_pct"] == 100:
+            after = f.get("worst_power_pct_after_loss")
+            if f["robust_pct"] == 100 and after is not None and after < DEFAULT_MIN_POWER * 100:
+                cons.append(
+                    f"Losing {f['expected_losses']} run(s) still leaves a model that can be fitted, but in the "
+                    f"worst case power falls to about {after}%."
+                )
+            elif f["robust_pct"] == 100:
                 pros.append(f"Survives losing any {f['expected_losses']} runs and still answers the question.")
             else:
                 cons.append(
@@ -368,7 +398,7 @@ new number. If you want to state a figure that is not in the JSON, leave it out 
 5. Write for someone deciding, not someone studying. Say what each option buys and what it costs.
 6. Readers often do not know what "power" or "standard deviations" mean. When you mention power, say it \
 as a chance of finding a real effect; when the facts give "detectable_effect_units", prefer that figure in \
-the response's own units over anything expressed in standard deviations.
+the response's own units over anything expressed in standard deviations. "min_power_pct" is the weakest term in the model; "main_power_pct", "interaction_power_pct" and "curvature_power_pct" break it down. When the curvature or interaction figure is the low one, say so by name.
 
 Reply with JSON only, matching this shape exactly:
 {"headline": "one sentence naming the recommendation and why",
