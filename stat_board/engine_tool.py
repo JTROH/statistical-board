@@ -23,7 +23,7 @@ _GROUP_COMMANDS = {
 _STANDALONE = {"regression", "two-way-anova", "ancova", "poisson", "negbin",
                "chisquare", "power", "correct",
                "predict", "vif", "box-cox", "design-coverage", "doe-optimum",
-               "stationary-point"}
+               "stationary-point", "bayes-regression"}
 
 TOOL_NAME = "run_stat"
 
@@ -60,7 +60,9 @@ def build_tool() -> dict[str, Any]:
             "of the response with a CI — use it before deciding between raw and log scale. "
             "stationary-point (formula + factors) is canonical analysis of a quadratic model: "
             "max/min/saddle, its location with CIs, and whether it lies inside the tested "
-            "region — the untested-optimum counterpart to doe-optimum."
+            "region — the untested-optimum counterpart to doe-optimum. bayes-regression "
+            "(formula) gives a JZS Bayes factor per model term (full model vs without "
+            "that term), matching R's BayesFactor — the Bayesian reading of a regression/DoE fit."
         ),
         "input_schema": {
             "type": "object",
@@ -179,6 +181,8 @@ def make_executor(
                 res = analyses.box_cox(data_path, inp["formula"], alpha=a)
             elif cmd == "design-coverage":
                 res = analyses.design_coverage(data_path, inp["factors"], value=inp.get("value"))
+            elif cmd == "bayes-regression":
+                res = analyses.bayes_regression(data_path, inp["formula"])
             elif cmd == "stationary-point":
                 res = analyses.stationary_point(data_path, inp["formula"], inp["factors"], alpha=a)
             elif cmd == "doe-optimum":

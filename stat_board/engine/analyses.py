@@ -784,6 +784,60 @@ def doe_optimum(path: str, formula: str, factors: list[str], value: str) -> dict
     }
 
 
+def bayes_regression(path: str, formula: str, *, r: float = bayes.REGRESSION_PRIOR_SCALE) -> dict[str, Any]:
+    """Bayes factor for each term of a linear model: the full model against the
+    same model without that term (all of the term's columns).
+
+    JZS / Zellner-Siow prior with every predictor sharing one g — the same
+    numbers as R's ``BayesFactor::regressionBF`` / ``lmBF`` for continuous
+    predictors (a categorical term such as ``C(block)`` is treated as its
+    dummy columns under the same g, which BayesFactor does differently).
+    BF10 > 1 favours keeping the term; BF10 < 1 is evidence it does nothing,
+    which a p-value can never give.
+    """
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    y = np.asarray(model.model.endog, float)
+    x = np.asarray(model.model.exog, float)
+    design_info = model.model.data.design_info
+    n = len(y)
+    tss = float(((y - y.mean()) ** 2).sum())
+
+    def r2_of(columns: list[int]) -> float:
+        beta, *_ = np.linalg.lstsq(x[:, columns], y, rcond=None)
+        return 1.0 - float(((y - x[:, columns] @ beta) ** 2).sum()) / tss
+
+    intercept = [i for i, name in enumerate(design_info.column_names) if name == "Intercept"]
+    if not intercept:
+        raise ValueError("the formula needs an intercept for these Bayes factors")
+    all_cols = list(range(x.shape[1]))
+    p_full = x.shape[1] - 1
+    log_bf_full = np.log(bayes.bayesfactor_r2(n, p_full, r2_of(all_cols), r=r))
+
+    terms = []
+    for term_name, cols in design_info.term_name_slices.items():
+        if term_name == "Intercept":
+            continue
+        dropped = set(range(cols.start, cols.stop))
+        kept = [i for i in all_cols if i not in dropped]
+        p_reduced = len(kept) - 1
+        log_bf_reduced = 0.0 if p_reduced == 0 else np.log(bayes.bayesfactor_r2(n, p_reduced, r2_of(kept), r=r))
+        bf10 = float(np.exp(log_bf_full - log_bf_reduced))
+        terms.append({"term": term_name, "bf10": bf10, "bf01": 1.0 / bf10,
+                      "interpretation": bayes.interpret_bf(bf10)})
+    return {
+        "analysis": "bayes_regression", "formula": formula, "n": n, "prior_scale": r,
+        "model_bf10_vs_intercept": float(np.exp(log_bf_full)),
+        "terms": terms,
+        "note": "Each BF compares the full model with the model lacking that term (JZS prior, one shared g). "
+                "Terms involved in an interaction are compared with the interaction still present.",
+    }
+
+
 def stationary_point(path: str, formula: str, factors: list[str], *, alpha: float = 0.05) -> dict[str, Any]:
     """Canonical analysis of a fitted second-order model: where the surface is
     flat, whether that point is a maximum, minimum or saddle, and how precisely

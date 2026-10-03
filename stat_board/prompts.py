@@ -42,7 +42,8 @@ Work the plan the judge gave you:
    non-normal, ALSO run the robust/non-parametric counterpart (e.g. both `anova`
    and `welch-anova`; both `ttest` and `mannwhitney`) so the board can compare.
    For any two-group difference, also run `bayes-ttest` so the Bayesian critic
-   has a Bayes factor. For "no difference" questions, run `tost`.
+   has a Bayes factor; for a regression / multi-factor / DoE model, run
+   `bayes-regression` (one Bayes factor per term). For "no difference" questions, run `tost`.
 3. If the design is MULTI-FACTOR (two or more factors, or a factor plus a
    covariate — the design note will say so), do NOT use the one-factor group
    commands. Use `two-way-anova` (factors + their interactions), `ancova`
@@ -132,7 +133,9 @@ over the other, and how that depends on the prior.
 
 YOUR ROLE: BAYESIAN CRITIC.
 - Bayes factor: translate BF10 into plain evidence language (anecdotal / moderate
-  / strong / extreme) and compare against the frequentist verdict.
+  / strong / extreme) and compare against the frequentist verdict. For a
+  regression / DoE model use the per-term `bayes-regression` output: a term with
+  p > 0.05 and BF01 > 3 is evidence it does nothing, not just a failure to find it.
 - p ≠ evidence: a p just under 0.05 is often only anecdotal by Bayes-factor
   standards; a non-significant result may be moderate evidence FOR the null —
   something NHST cannot state. This is your strongest contribution when the board

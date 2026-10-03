@@ -123,6 +123,11 @@ def build_parser() -> argparse.ArgumentParser:
     opt.add_argument("--factor", action="append", required=True, dest="factors")
     opt.add_argument("--value", required=True, help="numeric outcome column")
 
+    bz = sub.add_parser("bayes-regression", help="JZS Bayes factor per term of a linear model")
+    bz.add_argument("--data", required=True)
+    bz.add_argument("--formula", required=True)
+    bz.add_argument("--r", type=float, default=None, help="prior scale (default sqrt(2)/4, BayesFactor 'medium')")
+
     sp = sub.add_parser("stationary-point", help="canonical analysis: max/min/saddle of a quadratic model, with CI")
     sp.add_argument("--data", required=True)
     sp.add_argument("--formula", required=True)
@@ -197,6 +202,9 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return analyses.box_cox(args.data, args.formula, alpha=args.alpha)
     if cmd == "design-coverage":
         return analyses.design_coverage(args.data, args.factors, value=args.value)
+    if cmd == "bayes-regression":
+        kwargs = {} if args.r is None else {"r": args.r}
+        return analyses.bayes_regression(args.data, args.formula, **kwargs)
     if cmd == "stationary-point":
         return analyses.stationary_point(args.data, args.formula, args.factors, alpha=args.alpha)
     if cmd == "doe-optimum":
