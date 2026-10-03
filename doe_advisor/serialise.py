@@ -9,11 +9,18 @@ drift apart on what "the numbers" are.
 from __future__ import annotations
 
 
-def serialise_option(option) -> dict:
-    """One :class:`~doe_advisor.candidates.ScoredDesign` as a JSON-safe dict."""
+def serialise_option(option, response=None) -> dict:
+    """One :class:`~doe_advisor.candidates.ScoredDesign` as a JSON-safe dict.
+
+    ``response`` (the spec's primary response) only adds ``detectable_fold``
+    when the design was powered on the log10 scale.
+    """
     props = option.properties
     power = props.power.min_power
+    detectable = props.power.detectable_effect_units
+    fold = 10**detectable if response is not None and response.is_log and detectable is not None else None
     return {
+        "detectable_fold": None if fold is None else round(fold, 4),
         "name": option.design.name,
         "family": option.design.family,
         "roles": option.roles,

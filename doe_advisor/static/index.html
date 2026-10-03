@@ -74,7 +74,7 @@
     <table class="grid" id="responses">
       <thead>
         <tr>
-          <th>Name</th><th>Units</th><th>Goal</th><th>Target effect</th><th>Noise SD</th><th aria-label="remove"></th>
+          <th>Name</th><th>Units</th><th>Goal</th><th>Noise as</th><th>Target effect (or fold)</th><th>Noise SD (or CV&nbsp;%)</th><th aria-label="remove"></th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -118,6 +118,9 @@
           in your units. If that is bigger than your target effect, the design is too small for your
           question. Each option also shows what happens to power if your noise SD guess is 1.5&times; too
           low, because the noise figure is the one people are least sure of.
+          If the scatter grows with the level (titres, cell counts), choose <strong>CV&nbsp;%</strong>: give the
+          noise as a CV and the target as a fold change (1.5 = +50%). Power is then worked out on the log10
+          scale, and the results must be analysed as log10 too.
         </dd>
       </dl>
     </details>

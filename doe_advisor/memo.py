@@ -81,7 +81,14 @@ def _question_section(spec: DesignSpec) -> str:
         units = f" {response.units}" if response.units else ""
         lines += [f"Response: **{response.name}**{f' ({response.units})' if response.units else ''}. "
                   f"Goal: **{response.goal_statement}**.", ""]
-        if response.standardised_effect is not None:
+        if response.standardised_effect is not None and response.is_log:
+            lines += [
+                f"Smallest change worth detecting: a **{response.target_fold:g}-fold** change, against run-to-run "
+                f"noise of **{response.noise_cv_pct:g}% CV** — a signal **{response.standardised_effect:.2f} "
+                f"times** the size of the noise on the log10 scale.",
+                "",
+            ]
+        elif response.standardised_effect is not None:
             lines += [
                 f"Smallest change worth detecting: **{response.target_effect}{units}**, against a run-to-run "
                 f"standard deviation of **{response.noise_sd}{units}** — a signal "
@@ -142,14 +149,25 @@ def _power_primer(
     response = spec.primary_response
     if response is None or response.noise_sd is None:
         return ""
-    units = f" {response.units}" if response.units else ""
+    units = f" {response.display_units}" if response.display_units else ""
     lines = [
         "## How to read the power figures",
         "",
-        f"**Noise SD** ({response.noise_sd}{units}) is how much {response.name} scatters when you run the "
+        f"**Noise SD** ({response.noise_sd:.4g}{units}) is how much {response.name} scatters when you run the "
         f"*same* settings twice. It is the size of a change that could be nothing but chance.",
         "",
     ]
+    if response.is_log:
+        lines += [
+            f"**Log scale.** You gave the noise as a CV of {response.noise_cv_pct:g}%"
+            + (f" and the target as a {response.target_fold:g}-fold change" if response.target_fold else "")
+            + f". Noise that grows with the level is constant on a log scale, so every power figure here is "
+            f"for **log10 {response.name}**: the CV becomes an SD of {response.noise_sd:.4g} log10 units"
+            + (f" and the fold change a difference of {response.target_effect:.4g}" if response.target_fold else "")
+            + ". Record raw values at the bench, and analyse their log10 afterwards — the run sheet's "
+            "analysis hint already does.",
+            "",
+        ]
     if response.target_effect is not None:
         lines += [
             f"**Target effect** ({response.target_effect}{units}) is the smallest change you would act on. "
@@ -177,7 +195,12 @@ def _power_primer(
 
     for option in options:
         pw = option.properties.power
-        seen = "—" if pw.detectable_effect_units is None else f"{pw.detectable_effect_units:.3g}{units}"
+        if pw.detectable_effect_units is None:
+            seen = "—"
+        elif response.is_log:
+            seen = f"{10 ** pw.detectable_effect_units:.3g}-fold"
+        else:
+            seen = f"{pw.detectable_effect_units:.3g}{units}"
         lines.append(
             f"| {option.design.name} | {option.n_runs} | {seen} | {pct(pw.min_main_effect_power)} | "
             f"{pct(pw.min_interaction_power)} | {pct(pw.min_curvature_power)} | {pct(pw.min_power)} | "

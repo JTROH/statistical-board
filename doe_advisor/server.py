@@ -130,14 +130,17 @@ def design(payload: FormPayload):
 
     response = spec.primary_response
     return {
-        "options": [_serialise(o) for o in options],
+        "options": [_serialise(o, spec.primary_response) for o in options],
         # What every power figure above was computed from, so the front end can
         # say "you asked for X; this design sees Y" in the scientist's units.
         "power_basis": None
         if response is None
         else {
             "name": response.name,
-            "units": response.units,
+            "units": response.display_units,
+            "scale": response.scale,
+            "noise_cv_pct": response.noise_cv_pct,
+            "target_fold": response.target_fold,
             "goal": response.goal.value,
             "goal_statement": response.goal_statement,
             "target_value": response.target_value,

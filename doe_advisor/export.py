@@ -98,11 +98,20 @@ def analysis_hint(spec: DesignSpec) -> dict:
     factors = [natural_column(f) for f in spec.factors]
     responses = [response_column(r.name, r.units) for r in spec.responses]
     value = responses[0] if responses else "<response>"
-    formula = f"{value} ~ " + " * ".join(factors) if factors else ""
+    log = bool(spec.responses) and spec.responses[0].is_log
+    lhs = f"np.log10({value})" if log else value
+    formula = f"{lhs} ~ " + " * ".join(factors) if factors else ""
     return {
         "factor_columns": factors,
         "response_columns": responses,
         "formula": formula,
+        "response_scale": "log10" if log else "raw",
+        "note": (
+            f"The design was powered for log10 {spec.responses[0].name}. Record raw values; analyse the "
+            f"log10 (the formula above does). Ask the board to analyse on the log10 scale."
+            if log
+            else None
+        ),
         "skill": "/stat-board data=<run sheet>.csv question=\"...\" "
                  + f"value={value} " + " ".join(f"factor={f}" for f in factors),
         "cli": "python3 -m stat_board \"<your question>\" --data <run sheet>.csv "

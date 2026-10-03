@@ -117,6 +117,14 @@ class Response:
     noise_df: int | None = None
     goal: ResponseGoal = ResponseGoal.SCREEN
     target_value: float | None = None  # only meaningful when goal is TARGET
+    # "raw", or "log10" when the scientist described the noise as a CV and the
+    # target as a fold change. Then ``target_effect`` and ``noise_sd`` hold the
+    # log10 equivalents (see ``intake``), the power maths runs unchanged on that
+    # scale, and the response must be analysed as log10 afterwards. The
+    # originals are kept for display.
+    scale: str = "raw"
+    noise_cv_pct: float | None = None
+    target_fold: float | None = None
 
     @property
     def standardised_effect(self) -> float | None:
@@ -124,6 +132,17 @@ class Response:
         if self.target_effect is None or self.noise_sd in (None, 0):
             return None
         return abs(self.target_effect) / abs(self.noise_sd)  # type: ignore[arg-type]
+
+    @property
+    def is_log(self) -> bool:
+        return self.scale == "log10"
+
+    @property
+    def display_units(self) -> str:
+        """Units of ``target_effect`` / ``noise_sd`` as stored: log10 units on the log scale."""
+        if self.is_log:
+            return f"log10 {self.units}".strip()
+        return self.units
 
     @property
     def goal_statement(self) -> str:

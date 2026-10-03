@@ -43,6 +43,11 @@ function responseRow(response = {}) {
       <select class="r-goal">${goals.map((g) => `<option value="${g.value}">${g.label}</option>`).join("")}</select>
       <input class="r-target-value num" type="number" step="any" placeholder="target value" hidden>
     </td>
+    <td>
+      <select class="r-noise-model" title="Noise as a fixed SD, or as a CV (noise that grows with the level, e.g. titre)">
+        <option value="sd">SD</option><option value="cv">CV %</option>
+      </select>
+    </td>
     <td><input class="r-target num" type="number" step="any" placeholder="blank = unknown"></td>
     <td><input class="r-noise num" type="number" step="any" placeholder="blank = unknown"></td>
     <td><button type="button" class="link" title="Remove this response">&times;</button></td>`;
@@ -50,8 +55,17 @@ function responseRow(response = {}) {
   tr.querySelector(".r-units").value = response.units ?? "";
   tr.querySelector(".r-goal").value = response.goal ?? "screen";
   tr.querySelector(".r-target-value").value = response.target_value ?? "";
-  tr.querySelector(".r-target").value = response.target_effect ?? "";
-  tr.querySelector(".r-noise").value = response.noise_sd ?? "";
+  const cv = response.noise_model === "cv";
+  tr.querySelector(".r-noise-model").value = cv ? "cv" : "sd";
+  tr.querySelector(".r-target").value = (cv ? response.target_fold : response.target_effect) ?? "";
+  tr.querySelector(".r-noise").value = (cv ? response.noise_cv_pct : response.noise_sd) ?? "";
+  const syncNoiseModel = () => {
+    const isCv = tr.querySelector(".r-noise-model").value === "cv";
+    tr.querySelector(".r-target").placeholder = isCv ? "fold, e.g. 1.5" : "blank = unknown";
+    tr.querySelector(".r-noise").placeholder = isCv ? "CV %, e.g. 10" : "blank = unknown";
+  };
+  tr.querySelector(".r-noise-model").onchange = syncNoiseModel;
+  syncNoiseModel();
   tr.querySelector("button").onclick = () => {
     tr.remove();
     updateEffectNote();
@@ -86,8 +100,16 @@ function readForm() {
     units: tr.querySelector(".r-units").value.trim(),
     goal: tr.querySelector(".r-goal").value,
     target_value: numOrNull(tr.querySelector(".r-target-value").value),
-    target_effect: numOrNull(tr.querySelector(".r-target").value),
-    noise_sd: numOrNull(tr.querySelector(".r-noise").value),
+    ...(tr.querySelector(".r-noise-model").value === "cv"
+      ? {
+          noise_model: "cv",
+          target_fold: numOrNull(tr.querySelector(".r-target").value),
+          noise_cv_pct: numOrNull(tr.querySelector(".r-noise").value),
+        }
+      : {
+          target_effect: numOrNull(tr.querySelector(".r-target").value),
+          noise_sd: numOrNull(tr.querySelector(".r-noise").value),
+        }),
   }));
   const named = factors.filter((f) => f.name);
   return {
@@ -213,7 +235,14 @@ function prosAndCons(option, cheapest, dearest, basis) {
       }
     });
 
-    if (option.detectable_effect_units != null && basis && basis.target_effect != null) {
+    if (option.detectable_fold != null && basis && basis.target_fold != null) {
+      const seen = sig(option.detectable_fold);
+      if (option.power >= 0.8) {
+        pros.push(`Smallest change it can reliably see: about ${seen}-fold. You asked for ${basis.target_fold}-fold, which is larger — you have margin.`);
+      } else {
+        cons.push(`Smallest change it can reliably see: about ${seen}-fold. Your ${basis.target_fold}-fold is smaller than that, so it will often go unnoticed.`);
+      }
+    } else if (option.detectable_effect_units != null && basis && basis.target_effect != null) {
       const seen = sig(option.detectable_effect_units);
       if (option.power >= 0.8) {
         pros.push(`Smallest change it can reliably see: about ${seen}${u}. You asked for ${basis.target_effect}${u}, which is larger — you have margin.`);
@@ -284,9 +313,13 @@ function renderPowerBasis(basis) {
   } else {
     runs = " No practical run count reaches 80% power at this target effect and noise.";
   }
+  const ratio = Number(basis.standardised_effect).toFixed(2);
   el.textContent =
-    `Power is for ${basis.name}: a change of ${basis.target_effect}${u} against run-to-run noise of ` +
-    `${basis.noise_sd}${u} (${Number(basis.standardised_effect).toFixed(2)} times the noise).${goal}${runs}`;
+    basis.scale === "log10" && basis.target_fold != null && basis.noise_cv_pct != null
+      ? `Power is for log10 ${basis.name}: a ${basis.target_fold}-fold change against ${basis.noise_cv_pct}% CV noise ` +
+        `(${ratio} times the noise on the log scale). Record raw values; analyse their log10.${goal}${runs}`
+      : `Power is for ${basis.name}: a change of ${basis.target_effect}${u} against run-to-run noise of ` +
+        `${basis.noise_sd}${u} (${ratio} times the noise).${goal}${runs}`;
 }
 
 function renderDetails(options, basis) {

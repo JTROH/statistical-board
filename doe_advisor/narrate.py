@@ -97,7 +97,15 @@ def option_facts(option: ScoredDesign, spec: DesignSpec, cheapest: int, dearest:
             None if props.power.min_power_if_noise_high is None else round(props.power.min_power_if_noise_high * 100)
         ),
         "noise_stress_factor": round(props.power.noise_stress_factor, 2),
-        "response_units": spec.primary_response.units if spec.primary_response else "",
+        "response_units": spec.primary_response.display_units if spec.primary_response else "",
+        "log_scale": bool(spec.primary_response and spec.primary_response.is_log),
+        "detectable_fold": (
+            _sig(10 ** props.power.detectable_effect_units)
+            if spec.primary_response and spec.primary_response.is_log and props.power.detectable_effect_units
+            else None
+        ),
+        "target_fold": spec.primary_response.target_fold if spec.primary_response else None,
+        "noise_cv_pct": spec.primary_response.noise_cv_pct if spec.primary_response else None,
         "target_effect": spec.primary_response.target_effect if spec.primary_response else None,
         "is_cheapest": props.n_runs == cheapest,
         "is_dearest": props.n_runs == dearest,
@@ -220,17 +228,20 @@ class TemplateNarrator:
             # change this design can reliably see, and how does it compare with
             # the change they asked for?
             if f["detectable_effect_units"] is not None and f["target_effect"] is not None:
-                seen = f["detectable_effect_units"]
-                asked = f["target_effect"]
+                if f["log_scale"] and f["detectable_fold"] is not None and f["target_fold"] is not None:
+                    seen_text, asked_text = f"a {f['detectable_fold']}-fold change", f"{f['target_fold']}-fold"
+                else:
+                    seen_text = f"{f['detectable_effect_units']}{units}"
+                    asked_text = f"{f['target_effect']}{units}"
                 if pct >= DEFAULT_MIN_POWER * 100:
                     pros.append(
-                        f"The smallest change it can reliably see (at 80% power) is about {seen}{units}; "
-                        f"you asked to see {asked}{units}, which is larger, so you have margin."
+                        f"The smallest change it can reliably see (at 80% power) is about {seen_text}; "
+                        f"you asked to see {asked_text}, which is larger, so you have margin."
                     )
                 else:
                     cons.append(
-                        f"The smallest change it can reliably see (at 80% power) is about {seen}{units}; "
-                        f"the {asked}{units} you asked for is smaller than that, so it will often go unnoticed."
+                        f"The smallest change it can reliably see (at 80% power) is about {seen_text}; "
+                        f"the {asked_text} you asked for is smaller than that, so it will often go unnoticed."
                     )
             if f["min_power_pct_if_noise_high"] is not None and pct >= DEFAULT_MIN_POWER * 100:
                 worse = f["min_power_pct_if_noise_high"]
@@ -350,10 +361,16 @@ def _caveats(spec: DesignSpec, options: list[ScoredDesign]) -> list[str]:
             "ranking leans entirely on the other axes. Supplying both would sharpen this considerably."
         )
     else:
-        units = f" {response.units}" if response.units else ""
+        units = f" {response.display_units}" if response.display_units else ""
+        stated = (
+            f"Power assumes run-to-run noise of {response.noise_cv_pct:g}% CV and a target "
+            f"{response.target_fold:g}-fold change, both taken to the log10 scale — a signal"
+            if response.is_log and response.noise_cv_pct and response.target_fold
+            else f"Power assumes a run-to-run standard deviation of {response.noise_sd}{units} and a target "
+            f"effect of {response.target_effect}{units} — a signal"
+        )
         notes.append(
-            f"Power assumes a run-to-run standard deviation of {response.noise_sd}{units} and a target "
-            f"effect of {response.target_effect}{units} — a signal {response.standardised_effect:.2f} times "
+            f"{stated} {response.standardised_effect:.2f} times "
             f"the size of the noise. The noise figure is the one to be sure of: if the real variability is "
             f"larger than you entered, every power figure here is optimistic, and each option shows how "
             f"much it would lose if the noise were {round(noise_stress_factor(response), 2)} times larger."
@@ -466,7 +483,10 @@ class ClaudeNarrator:
                     if spec.primary_response is None
                     else {
                         "name": spec.primary_response.name,
-                        "units": spec.primary_response.units,
+                        "units": spec.primary_response.display_units,
+                        "scale": spec.primary_response.scale,
+                        "noise_cv_pct": spec.primary_response.noise_cv_pct,
+                        "target_fold": spec.primary_response.target_fold,
                         "goal": spec.primary_response.goal_statement,
                         "target_effect": spec.primary_response.target_effect,
                         "noise_sd": spec.primary_response.noise_sd,

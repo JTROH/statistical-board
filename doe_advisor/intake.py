@@ -13,6 +13,7 @@ So: :func:`spec_from_dict` is the real entry point and never needs Claude.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -74,6 +75,20 @@ def _number(value, field: str, allow_none: bool = False) -> float | None:
     return parsed
 
 
+def cv_to_log10_sd(cv_pct: float) -> float:
+    """SD on the log10 scale of a lognormal response with this CV.
+
+    sigma_ln = sqrt(ln(1 + CV^2)), exactly, for a lognormal; divide by ln 10 for
+    log10. For small CVs this is close to CV / 2.303.
+    """
+    return math.sqrt(math.log1p((cv_pct / 100.0) ** 2)) / math.log(10.0)
+
+
+def cv_to_log10_effect(fold: float) -> float:
+    """A fold change as a log10 difference; a fall (fold < 1) is the same size as its inverse rise."""
+    return abs(math.log10(fold))
+
+
 def spec_from_dict(payload: dict) -> DesignSpec:
     """Validate a form payload into a :class:`DesignSpec`.
 
@@ -110,8 +125,27 @@ def spec_from_dict(payload: dict) -> DesignSpec:
         name = str((item or {}).get("name", "")).strip()
         if not name:
             continue
-        target = _number(item.get("target_effect"), f"target effect for {name}", allow_none=True)
-        noise = _number(item.get("noise_sd"), f"noise SD for {name}", allow_none=True)
+        noise_model = str(item.get("noise_model") or "sd").strip().lower()
+        if noise_model not in ("sd", "cv"):
+            raise IntakeError(f"{name}: noise_model must be 'sd' or 'cv'.")
+        cv_pct = fold = None
+        if noise_model == "cv":
+            # Noise that grows with the level (titres, cell counts) is stated
+            # as a CV and the effect as a fold change; on a log scale both
+            # become constants, which is what the power maths needs.
+            cv_pct = _number(item.get("noise_cv_pct"), f"noise CV % for {name}", allow_none=True)
+            fold = _number(item.get("target_fold"), f"target fold change for {name}", allow_none=True)
+            if cv_pct is not None and cv_pct <= 0:
+                raise IntakeError(f"{name}: the CV must be greater than zero percent.")
+            if fold is not None and fold <= 0:
+                raise IntakeError(f"{name}: a fold change must be greater than zero (e.g. 1.5 for +50%).")
+            if fold is not None and fold == 1:
+                raise IntakeError(f"{name}: a fold change of 1 is no change at all.")
+            target = None if fold is None else cv_to_log10_effect(fold)
+            noise = None if cv_pct is None else cv_to_log10_sd(cv_pct)
+        else:
+            target = _number(item.get("target_effect"), f"target effect for {name}", allow_none=True)
+            noise = _number(item.get("noise_sd"), f"noise SD for {name}", allow_none=True)
         if noise is not None and noise <= 0:
             raise IntakeError(f"{name}: the run-to-run standard deviation must be greater than zero.")
         noise_df = _number(item.get("noise_df"), f"noise degrees of freedom for {name}", allow_none=True)
@@ -133,6 +167,9 @@ def spec_from_dict(payload: dict) -> DesignSpec:
                 noise_df=None if noise_df is None or noise is None else int(noise_df),
                 goal=goal,
                 target_value=target_value if goal is ResponseGoal.TARGET else None,
+                scale="log10" if noise_model == "cv" else "raw",
+                noise_cv_pct=cv_pct,
+                target_fold=fold,
             )
         )
 
@@ -180,6 +217,11 @@ def spec_to_dict(spec: DesignSpec) -> dict:
                 "target_effect": r.target_effect,
                 "noise_sd": r.noise_sd,
                 "noise_df": r.noise_df,
+                **(
+                    {"noise_model": "cv", "noise_cv_pct": r.noise_cv_pct, "target_fold": r.target_fold}
+                    if r.is_log
+                    else {}
+                ),
             }
             for r in spec.responses
         ],

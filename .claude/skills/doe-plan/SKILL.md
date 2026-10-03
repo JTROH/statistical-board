@@ -148,6 +148,15 @@ it; the proposal is evidence-led, but the ranges are still their call.
 curvature). `goal`: `screen` · `maximize` · `minimize` · `target`. At least two
 factors are required. `--spec -` reads the spec from stdin.
 
+**Noise that grows with the level** (titres, cell counts): give the response
+`"noise_model": "cv", "noise_cv_pct": 10, "target_fold": 1.5` instead of
+`target_effect` / `noise_sd`. Power is then computed for log10 of the response;
+the run sheet still records raw values and its analysis hint fits
+`np.log10(<response>) ~ ...`. Ask for this whenever the user describes noise as
+a percentage. **Hard limits:** add `"hard_ranges": true` when a range is an
+operating limit (e.g. a fixed harvest window), so designs with runs outside it
+are disqualified rather than merely flagged.
+
 ## Command reference
 
 ```bash

@@ -131,10 +131,13 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return {
             "analysis": "options",
             "n_factors": spec.n_factors,
-            "options": [serialise_option(o) for o in options],
+            "options": [serialise_option(o, spec.primary_response) for o in options],
             "power_basis": None if response is None else {
                 "name": response.name,
-                "units": response.units,
+                "units": response.display_units,
+            "scale": response.scale,
+            "noise_cv_pct": response.noise_cv_pct,
+            "target_fold": response.target_fold,
                 "goal": response.goal.value,
                 "goal_statement": response.goal_statement,
                 "target_effect": response.target_effect,
