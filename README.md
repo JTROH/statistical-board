@@ -83,6 +83,31 @@ Box-Behnken. Cross-validated against R's `FrF2` and `rsm` on frozen benchmark
 cases — run inside the normal test suite, so a design-engine change that breaks
 agreement with R fails `pytest`.
 
+**Custom (optimal) designs** for what the classical families cannot do — the
+equivalent of JMP's Custom Design:
+
+- **Categorical factors** (media, cell line, resin, supplier) alongside continuous
+  ones, effect-coded; a two-level categorical scores exactly like a continuous factor.
+- **Any run count** — "I have 14 bioreactors", not 16.
+- **Constraints** — `feed + bolus <= 8` in natural units, and disallowed
+  combinations such as `never media = CD-C with cell line = clone 2`. A term no
+  design can estimate under the constraints is named and left out, not hidden.
+- **Fixed prior runs** for augmenting a study already run (`custom_design(...,
+  fixed_runs=...)` in the API).
+
+The search is Meyer–Nachtsheim coordinate exchange with rank-one updates,
+D-optimal for screening and interaction models and I-optimal for response
+surfaces, best of several random starts. Custom designs are scored on the same
+four axes as everything else.
+
+```json
+{"factors": [{"name": "feed", "low": 2, "high": 6, "units": "% v/v/day"},
+             {"name": "bolus", "low": 0, "high": 4, "units": "g/L"},
+             {"name": "media", "type": "categorical", "levels": ["CD-A", "CD-B", "CD-C"]},
+             {"name": "cell line", "type": "categorical", "levels": ["clone 1", "clone 2"]}],
+ "constraints_text": "feed + bolus <= 8\nnever media = CD-C with cell line = clone 2"}
+```
+
 The run sheet CSV carries `run_order`, `run_type`, coded *and* natural units per
 factor, and an empty column per response — the exact shape `stat_board` analyses.
 

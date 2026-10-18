@@ -78,6 +78,7 @@ def option_facts(option: ScoredDesign, spec: DesignSpec, cheapest: int, dearest:
         "runs": props.n_runs,
         "centre_points": option.design.n_center_points,
         "model_terms": props.n_model_terms,
+        "model_coefficients": props.n_coefficients or props.n_model_terms,
         "residual_df": props.residual_df,
         "score": round(option.score, 3),
         "min_power_pct": None if power is None else round(power * 100),
@@ -85,6 +86,7 @@ def option_facts(option: ScoredDesign, spec: DesignSpec, cheapest: int, dearest:
         "interaction_power_pct": _pct(props.power.min_interaction_power),
         "curvature_power_pct": _pct(props.power.min_curvature_power),
         "worst_alias": round(props.aliasing.worst_main_effect_alias, 2),
+        "fully_aliased": props.aliasing.main_effect_fully_aliased,
         "prediction_i_value": round(props.prediction.i_value, 2),
         "g_efficiency_pct": round(props.prediction.g_efficiency * 100),
         "detectable_effect_sd": (
@@ -110,6 +112,11 @@ def option_facts(option: ScoredDesign, spec: DesignSpec, cheapest: int, dearest:
         "is_cheapest": props.n_runs == cheapest,
         "is_dearest": props.n_runs == dearest,
         "three_level": bool(detail.get("three_level", False)),
+        "custom": option.design.family == "custom",
+        "criterion": detail.get("criterion"),
+        "n_starts": detail.get("n_starts"),
+        "has_continuous": any(not f.is_categorical for f in spec.factors),
+        "fits_curvature": spec.model_order is ModelOrder.QUADRATIC,
         "replicates": detail.get("replicates"),
         "resolution": detail.get("resolution"),
         "fraction": detail.get("fraction"),
@@ -269,7 +276,7 @@ class TemplateNarrator:
 
         if f["worst_alias"] == 0:
             pros.append("Every term in your model is cleanly separated — nothing is confounded.")
-        elif f["worst_alias"] >= 0.99:
+        elif f["fully_aliased"]:
             cons.append(f"Completely confounded: {f['alias_statements'][0]}")
         else:
             cons.append(f"Partly confounded: {f['alias_statements'][0]}")
@@ -282,15 +289,26 @@ class TemplateNarrator:
         if f["three_level"]:
             pros.append("Uses three levels per factor, so it can tell you whether the response curves.")
 
+        if f["custom"]:
+            aim = (
+                "the most precise predictions across the region (I-optimal)"
+                if f["criterion"] == "I"
+                else "the most precise effect estimates (D-optimal)"
+            )
+            pros.append(
+                f"Built for exactly {f['runs']} runs by an optimal-design search aiming at {aim}, so it fits "
+                f"your budget, factor types and constraints instead of a textbook size."
+            )
+
         # Centre points are not scored on any of the four axes, so their value
         # would otherwise be invisible — and their absence is easy to miss in a
         # design that scores well precisely because it spent nothing on them.
-        if f["centre_points"] >= 2 and not f["three_level"]:
+        if f["centre_points"] >= 2 and not f["three_level"] and not f["fits_curvature"]:
             cons.append(
                 f"Its {f['centre_points']} centre points cost runs that add no power, but they are what "
                 f"lets you check whether the response is curved before you commit to a straight-line model."
             )
-        elif f["centre_points"] == 0:
+        elif f["centre_points"] == 0 and f["has_continuous"] and not f["fits_curvature"]:
             cons.append(
                 "No centre points, so this design cannot tell you whether the response is curved. "
                 "If curvature is plausible, add two or three."
@@ -329,8 +347,11 @@ class TemplateNarrator:
                     f"runs are lost, the model can no longer be fitted at all."
                 )
 
+        coefficients = (
+            f" ({f['model_coefficients']} coefficients)" if f["model_coefficients"] != f["model_terms"] else ""
+        )
         summary = (
-            f"{f['runs']} runs, fitting {f['model_terms']} terms with {f['residual_df']} degrees of "
+            f"{f['runs']} runs, fitting {f['model_terms']} terms{coefficients} with {f['residual_df']} degrees of "
             f"freedom left over for error."
         )
         return OptionNarrative(
@@ -402,10 +423,18 @@ def _caveats(spec: DesignSpec, options: list[ScoredDesign]) -> list[str]:
                 else ""
             )
         )
-    notes.append(
-        "These are classical designs. Constrained design spaces and must-include historical runs "
-        "are not yet supported."
-    )
+    custom = [o for o in options if o.design.family == "custom"]
+    if custom:
+        notes.append(
+            "Custom designs come from a coordinate-exchange search (the method behind JMP's Custom Design). "
+            "It reliably finds a design at or very near the best possible, but does not prove it is the best; "
+            "the scores shown are of the design actually found."
+        )
+    else:
+        notes.append(
+            "These are classical designs. Give a run budget, constraints or a categorical factor to have a "
+            "custom (optimal) design offered alongside them."
+        )
     notes.append("Randomise the run order before executing — the run sheet gives one such order.")
     return notes
 
@@ -487,10 +516,15 @@ class ClaudeNarrator:
             {
                 "question": {
                     "factors": [
-                        {"name": f.name, "low": f.low, "high": f.high, "units": f.units} for f in spec.factors
+                        {"name": f.name, "type": "categorical", "levels": list(f.levels), "units": f.units}
+                        if f.is_categorical
+                        else {"name": f.name, "low": f.low, "high": f.high, "units": f.units}
+                        for f in spec.factors
                     ],
                     "model": spec.model_order.label,
                     "budget_runs": spec.max_runs,
+                    "constraints": [c.describe() for c in spec.constraints]
+                    + [f"never {d.describe()}" for d in spec.disallowed],
                     "response": None
                     if spec.primary_response is None
                     else {

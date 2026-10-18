@@ -25,7 +25,7 @@ from itertools import combinations
 
 import numpy as np
 
-from .model import Term, block_columns, model_matrix
+from .model import Levels, Term, block_columns, model_matrix
 
 # Random starts for the exchange. More is slower and rarely better for the
 # design sizes this tool handles (tens of runs).
@@ -45,7 +45,8 @@ def _criterion(
 ) -> tuple[float, float, int]:
     x = np.hstack([x_model, block_columns(labels)])
     xtx = x.T @ x
-    sign, logdet = np.linalg.slogdet(xtx)
+    with np.errstate(all="ignore"):  # see properties.d_efficiency
+        sign, logdet = np.linalg.slogdet(xtx)
     if sign <= 0:
         return (-np.inf, -np.inf, 0)
     # How much of each left-out term the block columns soak up, weighted so a
@@ -92,13 +93,21 @@ def _structured_starts(matrix: np.ndarray, potential: list[Term], n_blocks: int,
 
 
 def assign_blocks(
-    matrix: np.ndarray, terms: list[Term], n_blocks: int, seed: int = 0, potential: list[Term] | None = None
+    matrix: np.ndarray,
+    terms: list[Term],
+    n_blocks: int,
+    seed: int = 0,
+    potential: list[Term] | None = None,
+    levels: Levels = None,
 ) -> np.ndarray:
     """Block label (0..n_blocks-1) for each run.
 
     Raises ``ValueError`` when the runs cannot be split that finely: every
     block needs at least two runs, or its offset is just that run's value.
+    With categorical factors (``levels``) the textbook sign-based starts do not
+    apply, so only the random starts are refined.
     """
+    categorical = levels is not None and any(levels)
     matrix = np.asarray(matrix, dtype=float)
     n = matrix.shape[0]
     if n_blocks < 2:
@@ -106,24 +115,28 @@ def assign_blocks(
     if n < 2 * n_blocks:
         raise ValueError(f"{n} runs cannot be split into {n_blocks} blocks of at least 2")
 
-    x_model = model_matrix(matrix, terms)
+    x_model = model_matrix(matrix, terms, levels=levels)
     if potential is None:
         # Every left-out interaction of any order, plus left-out squares: the
         # weights then push the blocks onto the highest-order one available.
         k = matrix.shape[1]
         fitted = set(terms)
         potential = [c for r in range(2, k + 1) for c in combinations(range(k), r) if c not in fitted]
-        potential += [(i, i) for i in range(k) if (i, i) not in fitted]
-    x_potential = model_matrix(matrix, potential)
-    weights = np.array([10.0 ** -len(t) for t in potential])
-    centre = np.all(np.isclose(matrix, 0.0), axis=1)
+        potential += [(i, i) for i in range(k) if (i, i) not in fitted and not (categorical and levels[i])]
+    x_potential = model_matrix(matrix, potential, levels=levels)
+    widths = [model_matrix(matrix[:1], [t], levels=levels).shape[1] for t in potential]
+    weights = np.repeat([10.0 ** -len(t) for t in potential], widths) if potential else np.zeros(0)
+    cont = [j for j in range(matrix.shape[1]) if not (categorical and levels[j])]
+    centre = (
+        np.all(np.isclose(matrix[:, cont], 0.0), axis=1) if cont else np.zeros(matrix.shape[0], dtype=bool)
+    )
     sizes = block_sizes(n, n_blocks)
     rng = np.random.default_rng(seed)
 
     # Score every textbook start (cheap), refine only the best few (the swap
     # search is the expensive part), plus a few random starts for designs with
     # no textbook blocking.
-    structured = _structured_starts(matrix, potential, n_blocks, sizes)
+    structured = [] if categorical else _structured_starts(matrix, potential, n_blocks, sizes)
     structured.sort(key=lambda lab: _criterion(x_model, x_potential, weights, lab, centre), reverse=True)
     starts = structured[:N_REFINED]
     starts += [np.repeat(np.arange(n_blocks), sizes)[rng.permutation(n)] for _ in range(N_STARTS)]

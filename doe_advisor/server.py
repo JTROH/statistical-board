@@ -43,6 +43,9 @@ class FormPayload(BaseModel):
     expected_run_losses: float | None = 1
     hard_ranges: bool = False
     n_blocks: float | None = 1
+    constraints: list[dict] = []
+    disallowed: list[dict] = []
+    constraints_text: str = ""
     title: str | None = None
 
 

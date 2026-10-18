@@ -12,7 +12,8 @@ which is the shape ``stat_board`` already analyses::
 
 Coded and natural units are both written. The coded columns are what the design
 was built in; the natural ones are what the scientist sets on the equipment, and
-what ``stat_board``'s ``--factor`` flags should name.
+what ``stat_board``'s ``--factor`` flags should name. A categorical factor has no
+coded column — its setting is a level name, written as is.
 """
 
 from __future__ import annotations
@@ -41,14 +42,19 @@ def response_column(name: str, units: str = "") -> str:
     return _slug(f"{name}_{units}") if units else _slug(name)
 
 
-def run_type(coded_row: np.ndarray) -> str:
+def run_type(coded_row: np.ndarray, levels: tuple[int, ...] | None = None) -> str:
     """Classify one run from its coded coordinates alone.
 
     Derived, not stored: the generators do not tag individual runs, and inventing
     per-run metadata just for the export would be a second source of truth about
-    what a run is.
+    what a run is. Only continuous coordinates count — a categorical level index
+    is not a position in the box. With no continuous factor every run is a
+    ``factorial`` one.
     """
-    if np.all(np.isclose(coded_row, 0.0)):
+    coded_row = np.asarray(coded_row, dtype=float)
+    if levels is not None:
+        coded_row = coded_row[[j for j, k in enumerate(levels) if not k]]
+    if coded_row.size and np.all(np.isclose(coded_row, 0.0)):
         return "center"
     if np.any(np.abs(coded_row) > 1.0 + 1e-9):
         return "axial"
@@ -63,7 +69,10 @@ def run_sheet_rows(design: Design, spec: DesignSpec, *, seed: int = 0) -> tuple[
     blocked = design.blocks is not None
     header = ["run_order", "block", "run_type"] if blocked else ["run_order", "run_type"]
     for factor in spec.factors:
-        header += [f"{_slug(factor.name)}_coded", natural_column(factor)]
+        if factor.is_categorical:
+            header.append(natural_column(factor))
+        else:
+            header += [f"{_slug(factor.name)}_coded", natural_column(factor)]
     header += [response_column(r.name, r.units) for r in spec.responses]
 
     rows: list[list] = []
@@ -72,9 +81,12 @@ def run_sheet_rows(design: Design, spec: DesignSpec, *, seed: int = 0) -> tuple[
         row: list = [position + 1]
         if blocked:
             row.append(int(design.blocks[run]) + 1)  # 1-based on the bench sheet
-        row.append(run_type(coded_row))
-        for j in range(len(spec.factors)):
-            row += [f"{coded_row[j]:g}", f"{decoded[run, j]:g}"]
+        row.append(run_type(coded_row, design.levels))
+        for j, factor in enumerate(spec.factors):
+            if factor.is_categorical:
+                row.append(factor.setting(coded_row[j]))
+            else:
+                row += [f"{coded_row[j]:g}", f"{decoded[run, j]:g}"]
         row += [""] * len(spec.responses)  # the scientist fills these in
         rows.append(row)
     return header, rows
@@ -100,17 +112,21 @@ def analysis_hint(spec: DesignSpec) -> dict:
     its own.
     """
     factors = [natural_column(f) for f in spec.factors]
+    # C() makes a categorical factor categorical even when its level names are
+    # numbers ("lot 1, 2, 3" read back as integers would be fitted as a slope).
+    terms = [f"C({col})" if f.is_categorical else col for f, col in zip(spec.factors, factors, strict=True)]
     responses = [response_column(r.name, r.units) for r in spec.responses]
     value = responses[0] if responses else "<response>"
     log = bool(spec.responses) and spec.responses[0].is_log
     lhs = f"np.log10({value})" if log else value
-    formula = f"{lhs} ~ " + " * ".join(factors) if factors else ""
+    formula = f"{lhs} ~ " + " * ".join(terms) if terms else ""
     if formula and spec.n_blocks > 1:
         # The block offset is fitted, never interpreted: it is there to remove
         # day-to-day shifts, not to be tested as a finding.
         formula += " + C(block)"
     return {
         "factor_columns": factors,
+        "categorical_columns": [col for f, col in zip(spec.factors, factors, strict=True) if f.is_categorical],
         "response_columns": responses,
         "formula": formula,
         "response_scale": "log10" if log else "raw",

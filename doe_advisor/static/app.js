@@ -21,14 +21,31 @@ function factorRow(factor = {}) {
   const tr = document.createElement("tr");
   tr.innerHTML = `
     <td><input class="f-name" placeholder="e.g. pH"></td>
+    <td>
+      <select class="f-type" title="Continuous: a numeric range. Categorical: named options (media, cell line).">
+        <option value="continuous">continuous</option><option value="categorical">categorical</option>
+      </select>
+    </td>
     <td><input class="f-low num" type="number" step="any"></td>
     <td><input class="f-high num" type="number" step="any"></td>
+    <td class="f-levels-cell" colspan="2" hidden><input class="f-levels" placeholder="levels, e.g. media A, media B, media C"></td>
     <td><input class="f-units" placeholder="optional"></td>
     <td><button type="button" class="link" title="Remove this factor">&times;</button></td>`;
+  const categorical = factor.type === "categorical" || (Array.isArray(factor.levels) && factor.levels.length > 0);
   tr.querySelector(".f-name").value = factor.name ?? "";
-  tr.querySelector(".f-low").value = factor.low ?? "";
-  tr.querySelector(".f-high").value = factor.high ?? "";
+  tr.querySelector(".f-type").value = categorical ? "categorical" : "continuous";
+  tr.querySelector(".f-low").value = categorical ? "" : factor.low ?? "";
+  tr.querySelector(".f-high").value = categorical ? "" : factor.high ?? "";
+  tr.querySelector(".f-levels").value = Array.isArray(factor.levels) ? factor.levels.join(", ") : factor.levels ?? "";
   tr.querySelector(".f-units").value = factor.units ?? "";
+  const syncType = () => {
+    const isCat = tr.querySelector(".f-type").value === "categorical";
+    tr.querySelector(".f-low").parentElement.hidden = isCat;
+    tr.querySelector(".f-high").parentElement.hidden = isCat;
+    tr.querySelector(".f-levels-cell").hidden = !isCat;
+  };
+  tr.querySelector(".f-type").onchange = syncType;
+  syncType();
   tr.querySelector("button").onclick = () => tr.remove();
   return tr;
 }
@@ -89,12 +106,21 @@ function responseRow(response = {}) {
 const numOrNull = (value) => (value === "" || value == null ? null : Number(value));
 
 function readForm() {
-  const factors = [...$("factors").querySelectorAll("tbody tr")].map((tr) => ({
-    name: tr.querySelector(".f-name").value.trim(),
-    low: numOrNull(tr.querySelector(".f-low").value),
-    high: numOrNull(tr.querySelector(".f-high").value),
-    units: tr.querySelector(".f-units").value.trim(),
-  }));
+  const factors = [...$("factors").querySelectorAll("tbody tr")].map((tr) =>
+    tr.querySelector(".f-type").value === "categorical"
+      ? {
+          name: tr.querySelector(".f-name").value.trim(),
+          type: "categorical",
+          levels: tr.querySelector(".f-levels").value.split(",").map((v) => v.trim()).filter(Boolean),
+          units: tr.querySelector(".f-units").value.trim(),
+        }
+      : {
+          name: tr.querySelector(".f-name").value.trim(),
+          low: numOrNull(tr.querySelector(".f-low").value),
+          high: numOrNull(tr.querySelector(".f-high").value),
+          units: tr.querySelector(".f-units").value.trim(),
+        }
+  );
   const responses = [...$("responses").querySelectorAll("tbody tr")].map((tr) => ({
     name: tr.querySelector(".r-name").value.trim(),
     units: tr.querySelector(".r-units").value.trim(),
@@ -121,6 +147,7 @@ function readForm() {
     expected_run_losses: numOrNull($("losses").value),
     hard_ranges: $("hard-ranges").checked,
     n_blocks: numOrNull($("blocks").value),
+    constraints_text: $("constraints").value,
     title: named.length
       ? `Design options: ${named.map((f) => f.name).join(", ")}`
       : "Experimental design memo",
@@ -144,8 +171,29 @@ function writeForm(form) {
   if (form.expected_run_losses != null) $("losses").value = form.expected_run_losses;
   $("hard-ranges").checked = Boolean(form.hard_ranges);
   if (form.n_blocks != null) $("blocks").value = form.n_blocks;
+  $("constraints").value = constraintLines(form);
   updateModelNote();
   updateEffectNote();
+}
+
+/* Structured constraints (from a preset or the chat box) shown as the lines
+   the scientist would type, so the text box stays the one thing to edit. */
+function constraintLines(form) {
+  const lines = [];
+  for (const c of form.constraints || []) {
+    const terms = Object.entries(c.coefficients || {}).map(([name, w], i) => {
+      const sign = w < 0 ? "- " : i ? "+ " : "";
+      const mag = Math.abs(w) === 1 ? "" : `${Math.abs(w)}*`;
+      return `${sign}${mag}${name}`;
+    });
+    lines.push(`${terms.join(" ")} ${c.op || "<="} ${c.bound}`);
+  }
+  for (const d of form.disallowed || []) {
+    const parts = Object.entries(d).map(([name, v]) => `${name} = ${[].concat(v).join(" or ")}`);
+    lines.push(`never ${parts.join(" with ")}`);
+  }
+  if (form.constraints_text) lines.push(form.constraints_text);
+  return lines.join("\n");
 }
 
 /* Signal-to-noise, live, so the scientist sees what their two numbers mean
@@ -184,9 +232,9 @@ function updateEffectNote() {
 const pct = (v) => (v == null ? "—" : `${Math.round(v * 100)}%`);
 const num = (v, dp = 2) => (v == null ? "—" : Number(v).toFixed(dp));
 
-function confoundingLabel(worst) {
+function confoundingLabel(worst, fully) {
   if (worst === 0) return "none";
-  if (worst >= 0.99) return "complete";
+  if (fully ?? worst >= 0.99) return "complete";
   return `partial (${worst.toFixed(2)})`;
 }
 
@@ -207,7 +255,7 @@ function renderTable(options) {
       <td>${roleTag(o.roles)}${o.name}</td>
       <td>${o.n_runs}</td>
       <td>${pct(o.power)}</td>
-      <td>${confoundingLabel(o.worst_alias)}</td>
+      <td>${confoundingLabel(o.worst_alias, o.main_effect_fully_aliased)}</td>
       <td>${num(o.i_value)}</td>
       <td>${o.robustness_applicable ? pct(o.robustness) : "—"}</td>
       <td>${num(o.score, 3)}</td>`;
@@ -278,7 +326,15 @@ function prosAndCons(option, cheapest, dearest, basis) {
   if (option.exceeds_declared_range) {
     cons.push("Some runs sit outside the ranges you declared — check they are physically runnable.");
   }
-  if (option.n_center_points === 0) cons.push("No centre points, so it cannot tell you whether the response is curved.");
+  if (option.detail.criterion) {
+    const aim = option.detail.criterion === "I" ? "the most precise predictions (I-optimal)" : "the most precise effect estimates (D-optimal)";
+    pros.push(`Custom design: searched for exactly ${option.n_runs} runs, aiming at ${aim}, within your factor types and constraints.`);
+  }
+  const hasContinuous = (state.lastForm?.factors || []).some((f) => f.type !== "categorical" && f.name);
+  const quadratic = state.lastForm?.model_order === "quadratic";
+  if (option.n_center_points === 0 && hasContinuous && !quadratic) {
+    cons.push("No centre points, so it cannot tell you whether the response is curved.");
+  }
   if (option.residual_df <= 2) cons.push(`Only ${option.residual_df} degrees of freedom for error — wide error bars.`);
   if (option.robustness_applicable && option.robustness < 1) {
     cons.push(`Fragile: fails in ${pct(1 - option.robustness)} of run-loss scenarios.`);
@@ -306,7 +362,8 @@ function renderPowerBasis(basis) {
   }
   let runs = "";
   if (basis.runs_for_80_power != null) {
-    runs = ` An ideal two-level design reaches 80% power with about ${basis.runs_for_80_power} runs`;
+    const kind = (state.lastForm?.factors || []).some((f) => f.type === "categorical") ? "balanced" : "two-level";
+    runs = ` An ideal ${kind} design reaches 80% power with about ${basis.runs_for_80_power} runs`;
     if (basis.runs_for_80_power_if_noise_high != null) {
       const k = Number(basis.noise_stress_factor || 1.5).toPrecision(3).replace(/\.?0+$/, "");
       runs += `, or about ${basis.runs_for_80_power_if_noise_high} if the noise is really ${k}× larger`;
@@ -339,7 +396,7 @@ function renderDetails(options, basis) {
       <h3>${roleTag(option.roles)}${option.name}</h3>
       <p class="meta">
         ${option.n_runs} runs (${option.n_center_points} centre points) &middot;
-        ${option.n_model_terms} model terms &middot; ${option.residual_df} residual df &middot;
+        ${option.n_model_terms} model terms${option.n_coefficients && option.n_coefficients !== option.n_model_terms ? ` (${option.n_coefficients} coefficients)` : ""} &middot; ${option.residual_df} residual df &middot;
         D&#8209;efficiency ${num(option.d_efficiency, 3)} &middot; G&#8209;efficiency ${pct(option.g_efficiency)}
       </p>
       <div class="pros-cons">

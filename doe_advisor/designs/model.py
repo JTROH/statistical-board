@@ -10,31 +10,56 @@ A *term* is a tuple of factor indices, with repetition meaning a power:
 Everything that needs an ``X`` matrix — power, prediction variance, aliasing,
 optimality criteria — builds it here, so there is exactly one definition of
 what "the model" means.
+
+**Categorical factors.** ``levels`` gives, per factor, its number of levels
+(0 for a continuous factor). A categorical factor's column in the run matrix
+holds a level index, and it enters ``X`` as k-1 *effect-coded* columns:
+column j (for level j+1) is +1 at level j+1, -1 at level 0 (the reference) and
+0 elsewhere. A term then spans the product of its factors' columns, so a
+categorical main effect has k-1 columns and a categorical x continuous
+interaction k-1 more. A two-level categorical is coded -1 / +1, exactly like a
+continuous factor at its low / high, so the two give identical numbers.
+
+A categorical factor has no curvature: ``(i, i)`` is never a term for it.
+
+Terms keep their meaning (and their labels) at the level of factors; use
+:func:`term_slices` to find which columns of ``X`` belong to which term.
 """
 
 from __future__ import annotations
 
-from itertools import combinations
+from collections.abc import Sequence
+from functools import lru_cache
+from itertools import combinations, product
 
 import numpy as np
 
 from .spec import ModelOrder
 
 Term = tuple[int, ...]
+Levels = Sequence[int] | None
 
 
-def model_terms(n_factors: int, order: ModelOrder) -> list[Term]:
+def _level(levels: Levels, i: int) -> int:
+    return 0 if levels is None else int(levels[i])
+
+
+def _quadratic_ok(levels: Levels, i: int) -> bool:
+    return _level(levels, i) == 0
+
+
+def model_terms(n_factors: int, order: ModelOrder, levels: Levels = None) -> list[Term]:
     """Terms the scientist wants to be able to estimate, intercept first."""
     terms: list[Term] = [()]
     terms += [(i,) for i in range(n_factors)]
     if order in (ModelOrder.INTERACTION, ModelOrder.QUADRATIC):
         terms += [tuple(c) for c in combinations(range(n_factors), 2)]
     if order is ModelOrder.QUADRATIC:
-        terms += [(i, i) for i in range(n_factors)]
+        terms += [(i, i) for i in range(n_factors) if _quadratic_ok(levels, i)]
     return terms
 
 
-def potential_terms(n_factors: int, order: ModelOrder) -> list[Term]:
+def potential_terms(n_factors: int, order: ModelOrder, levels: Levels = None) -> list[Term]:
     """Terms *not* in the model that could still be active, and so could bias it.
 
     This is the set the alias matrix is computed against. The convention matches
@@ -49,7 +74,7 @@ def potential_terms(n_factors: int, order: ModelOrder) -> list[Term]:
 
     extra: list[Term] = [tuple(c) for c in combinations(range(n_factors), 3)]
     if order is ModelOrder.INTERACTION:
-        extra += [(i, i) for i in range(n_factors)]
+        extra += [(i, i) for i in range(n_factors) if _quadratic_ok(levels, i)]
     return extra
 
 
@@ -62,6 +87,47 @@ def term_label(term: Term, names: list[str]) -> str:
         counts[i] = counts.get(i, 0) + 1
     parts = [names[i] if p == 1 else f"{names[i]}^{p}" for i, p in sorted(counts.items())]
     return " x ".join(parts)
+
+
+def term_width(term: Term, levels: Levels = None) -> int:
+    """How many columns of ``X`` a term occupies."""
+    width = 1
+    for i in set(term):
+        k = _level(levels, i)
+        if k:
+            width *= k - 1
+    return width
+
+
+def term_slices(terms: list[Term], levels: Levels = None) -> list[slice]:
+    """The columns of ``X`` that belong to each term, in order."""
+    out, start = [], 0
+    for term in terms:
+        width = term_width(term, levels)
+        out.append(slice(start, start + width))
+        start += width
+    return out
+
+
+def n_columns(terms: list[Term], levels: Levels = None) -> int:
+    """Columns of ``X`` for these terms (blocks not included)."""
+    return sum(term_width(t, levels) for t in terms)
+
+
+def effect_codes(k: int) -> np.ndarray:
+    """(k, k-1) effect-coding matrix: row L is the coded row for level L."""
+    codes = np.zeros((k, k - 1), dtype=float)
+    codes[0, :] = -1.0
+    codes[np.arange(1, k), np.arange(k - 1)] = 1.0
+    return codes
+
+
+def categorical_columns(index_column: np.ndarray, k: int) -> np.ndarray:
+    """Effect-coded columns (n, k-1) for a column of level indices."""
+    idx = np.rint(np.asarray(index_column, dtype=float)).astype(int)
+    if idx.size and (idx.min() < 0 or idx.max() >= k):
+        raise ValueError(f"level index out of range for a {k}-level factor")
+    return effect_codes(k)[idx]
 
 
 def block_columns(blocks: np.ndarray | None) -> np.ndarray:
@@ -82,20 +148,80 @@ def block_columns(blocks: np.ndarray | None) -> np.ndarray:
     return cols
 
 
-def model_matrix(matrix: np.ndarray, terms: list[Term], blocks: np.ndarray | None = None) -> np.ndarray:
-    """Build X (n_runs, n_terms [+ b-1]) from a coded run matrix.
+class Expansion:
+    """How to build X by one vectorised product, for one model and one set of factors.
 
-    Block columns, when given, go *after* the model terms, so a term's column
-    index is the same blocked or not.
+    The run matrix is first widened into *base columns* — each continuous
+    factor as is, each categorical one as its k-1 effect codes — plus a final
+    column of ones. Every column of X is a product of base columns; ``index``
+    holds their positions, padded with the ones column to a common length, so
+    ``X = prod(base[:, index], axis=2)``. Columns come out in term order and,
+    within a term, in the order of :func:`itertools.product` over its factors'
+    columns.
+
+    The optimal-design search uses the pieces directly, so a trial change to
+    one factor only rewrites that factor's base columns.
+    """
+
+    def __init__(self, terms: tuple[Term, ...], levels: tuple[int, ...]):
+        self.levels = levels
+        self.slices: list[slice] = []
+        position = 0
+        for k in levels:
+            width = k - 1 if k else 1
+            self.slices.append(slice(position, position + width))
+            position += width
+        self.n_base = position + 1  # + the ones column
+        rows: list[list[int]] = []
+        for term in terms:
+            options = [range(self.slices[i].start, self.slices[i].stop) for i in term]
+            rows += [list(combo) for combo in product(*options)] if term else [[]]
+        depth = max((len(r) for r in rows), default=0) or 1
+        self.index = np.full((len(rows), depth), position, dtype=int)
+        for r, row in enumerate(rows):
+            self.index[r, : len(row)] = row
+        self._codes = {i: effect_codes(k) for i, k in enumerate(levels) if k}
+
+    def base(self, matrix: np.ndarray) -> np.ndarray:
+        """(n, n_base) base columns of a coded run matrix."""
+        out = np.ones((matrix.shape[0], self.n_base))
+        for i, k in enumerate(self.levels):
+            out[:, self.slices[i]] = categorical_columns(matrix[:, i], k) if k else matrix[:, [i]]
+        return out
+
+    def factor_base(self, i: int, values: np.ndarray) -> np.ndarray:
+        """(len(values), width) base columns of factor ``i`` at these settings."""
+        values = np.asarray(values, dtype=float)
+        if i in self._codes:
+            return self._codes[i][np.rint(values).astype(int)]
+        return values[:, None]
+
+    def rows(self, base: np.ndarray) -> np.ndarray:
+        """Model rows from base columns."""
+        if not self.index.size:
+            return np.zeros((base.shape[0], 0))
+        return np.prod(base[:, self.index], axis=2)
+
+
+@lru_cache(maxsize=256)
+def expansion(terms: tuple[Term, ...], levels: tuple[int, ...]) -> Expansion:
+    """The cached :class:`Expansion` for a model."""
+    return Expansion(terms, levels)
+
+
+def model_matrix(
+    matrix: np.ndarray, terms: list[Term], blocks: np.ndarray | None = None, levels: Levels = None
+) -> np.ndarray:
+    """Build X (n_runs, n_columns [+ b-1]) from a coded run matrix.
+
+    Block columns, when given, go *after* the model terms, so a term's columns
+    are the same blocked or not. Without categorical factors there is one
+    column per term, in term order.
     """
     matrix = np.asarray(matrix, dtype=float)
-    n_runs = matrix.shape[0]
-    x = np.empty((n_runs, len(terms)), dtype=float)
-    for j, term in enumerate(terms):
-        col = np.ones(n_runs, dtype=float)
-        for i in term:
-            col = col * matrix[:, i]
-        x[:, j] = col
+    lv = tuple(int(k) for k in levels) if levels is not None else (0,) * matrix.shape[1]
+    ex = expansion(tuple(terms), lv)
+    x = ex.rows(ex.base(matrix))
     if blocks is not None:
         x = np.hstack([x, block_columns(blocks)])
     return x
@@ -105,7 +231,14 @@ def n_block_params(blocks: np.ndarray | None) -> int:
     return 0 if blocks is None else int(np.asarray(blocks).max())
 
 
-def is_estimable(matrix: np.ndarray, terms: list[Term], tol: float = 1e-8, blocks: np.ndarray | None = None) -> bool:
+def n_params(terms: list[Term], blocks: np.ndarray | None = None, levels: Levels = None) -> int:
+    """Coefficients the model estimates, block offsets included."""
+    return n_columns(terms, levels) + n_block_params(blocks)
+
+
+def is_estimable(
+    matrix: np.ndarray, terms: list[Term], tol: float = 1e-8, blocks: np.ndarray | None = None, levels: Levels = None
+) -> bool:
     """Can this design fit this model at all?
 
     False means the model is *singular* — there are not enough independent runs,
@@ -113,28 +246,33 @@ def is_estimable(matrix: np.ndarray, terms: list[Term], tol: float = 1e-8, block
     fails this is not "weak", it is unusable for the stated model. With blocks,
     a term confounded with a block counts as not estimable.
     """
-    p = len(terms) + n_block_params(blocks)
+    p = n_params(terms, blocks, levels)
     if matrix.shape[0] < p:
         return False
-    x = model_matrix(matrix, terms, blocks)
+    x = model_matrix(matrix, terms, blocks, levels)
     return bool(np.linalg.matrix_rank(x, tol=tol) == p)
 
 
-def xtx_inv(matrix: np.ndarray, terms: list[Term], blocks: np.ndarray | None = None) -> np.ndarray:
+def xtx_inv(
+    matrix: np.ndarray, terms: list[Term], blocks: np.ndarray | None = None, levels: Levels = None
+) -> np.ndarray:
     """(X'X)^-1, the covariance structure of the coefficient estimates.
 
     Raises ``np.linalg.LinAlgError`` when the model is not estimable; callers
     are expected to gate on :func:`is_estimable` first.
     """
-    x = model_matrix(matrix, terms, blocks)
+    x = model_matrix(matrix, terms, blocks, levels)
     return np.linalg.inv(x.T @ x)
 
 
-def residual_df(matrix: np.ndarray, terms: list[Term], blocks: np.ndarray | None = None) -> int:
+def residual_df(
+    matrix: np.ndarray, terms: list[Term], blocks: np.ndarray | None = None, levels: Levels = None
+) -> int:
     """Degrees of freedom left over to estimate noise with.
 
     Zero means the model is saturated: it will fit the data perfectly and tell
     you nothing about uncertainty. This is the trap behind "just run the
-    minimum number of runs". Each extra block costs one.
+    minimum number of runs". Each extra block costs one, and each categorical
+    factor costs one per level beyond the first.
     """
-    return int(matrix.shape[0] - len(terms) - n_block_params(blocks))
+    return int(matrix.shape[0] - n_params(terms, blocks, levels))

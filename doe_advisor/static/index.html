@@ -52,10 +52,14 @@
   <!-- ---------------------------------------------------------------- -->
   <section class="card">
     <h2>2. Factors</h2>
-    <p class="hint">The things you can set. Low and high are the edges of the range you want to explore.</p>
+    <p class="hint">
+      The things you can set. Low and high are the edges of the range you want to explore. A factor with named
+      options instead of a range &mdash; media, cell line, resin, supplier &mdash; is <strong>categorical</strong>:
+      list its levels, separated by commas.
+    </p>
     <table class="grid" id="factors">
       <thead>
-        <tr><th>Name</th><th>Low</th><th>High</th><th>Units</th><th aria-label="remove"></th></tr>
+        <tr><th>Name</th><th>Type</th><th>Low</th><th>High</th><th>Units</th><th aria-label="remove"></th></tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -155,6 +159,17 @@
       </div>
     </div>
     <p class="hint" id="model-note"></p>
+    <div class="field wide">
+      <label for="constraints">Constraints (optional, one per line)</label>
+      <textarea id="constraints" rows="3"
+        placeholder="feed rate + glucose bolus <= 8&#10;never media = A with cell line = L2"></textarea>
+    </div>
+    <p class="hint">
+      Settings that cannot be run. A line with <code>&lt;=</code> or <code>&gt;=</code> limits a weighted sum of
+      continuous factors, in their own units; a line starting <code>never</code> rules out a combination of
+      categorical levels. Classical designs cannot respect constraints, so a <strong>custom design</strong> is
+      searched for; it is also offered whenever you set a run budget or a categorical factor.
+    </p>
   </section>
 
   <div class="actions">

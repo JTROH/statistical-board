@@ -20,7 +20,7 @@ from doe_advisor.designs.model import (
     residual_df,
     term_label,
 )
-from doe_advisor.designs.spec import ModelOrder
+from doe_advisor.designs.spec import Design, ModelOrder
 
 NAMES = ["pH", "DO", "temp", "feed"]
 
@@ -149,3 +149,17 @@ def test_dsd_keeps_main_effects_clear_of_interactions():
     report = alias_report(design, ModelOrder.MAIN, names)
     assert report.estimable
     assert report.worst_main_effect_alias == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_large_coefficient_in_a_non_orthogonal_design_is_partial_not_complete():
+    """In a constrained or optimal design an alias coefficient can exceed 1 while
+    the two terms are still separable; "cannot be told apart" is kept for a
+    potential term whose column lies inside the fitted columns' span."""
+    # Main effects of x0, x1 in five runs on an uneven grid: x0*x1 is not a
+    # combination of the fitted columns, but leaks into them.
+    matrix = np.array([[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [0.25, 0.75], [1.0, 0.0]])
+    design = Design("uneven", "test", matrix, ["x0", "x1"])
+    report = alias_report(design, ModelOrder.MAIN)
+    assert report.worst_main_effect_alias > 0.1
+    assert not report.main_effect_fully_aliased
+    assert all(not e.is_fully_aliased for e in report.entries)

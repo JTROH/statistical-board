@@ -107,13 +107,25 @@ def test_coverage_is_required_because_it_carries_the_tested_levels():
         augment.form_from_diagnostics(coverage=None)
 
 
-def test_categorical_factors_are_skipped_not_widened(tmp_path):
+def test_categorical_factors_are_carried_with_their_levels_not_widened(tmp_path):
     p = tmp_path / "cat.csv"
     p.write_text("x1,grp,y\n-1,a,10\n1,a,14\n-1,b,16\n1,b,20\n", encoding="utf-8")
     coverage = analyses.design_coverage(str(p), ["x1", "grp"], value="y")
     out = augment.form_from_diagnostics(coverage=coverage)
+    assert out["skipped_factors"] == []
+    grp = next(f for f in out["form"]["factors"] if f["name"] == "grp")
+    assert grp["type"] == "categorical" and grp["levels"] == ["a", "b"]
+    # ...and the form goes straight through intake into a custom design.
+    spec = spec_from_dict(out["form"])
+    assert spec.factors[[f.name for f in spec.factors].index("grp")].levels == ("a", "b")
+
+
+def test_a_factor_tested_at_one_setting_is_skipped(tmp_path):
+    p = tmp_path / "one.csv"
+    p.write_text("x1,grp,y\n-1,a,10\n1,a,14\n-1,a,16\n1,a,20\n", encoding="utf-8")
+    coverage = analyses.design_coverage(str(p), ["x1", "grp"], value="y")
+    out = augment.form_from_diagnostics(coverage=coverage)
     assert out["skipped_factors"] == ["grp"]
-    assert [f["name"] for f in out["form"]["factors"]] == ["x1"]
 
 
 # ---- the round trip ---- #

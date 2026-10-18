@@ -22,14 +22,22 @@ import numpy as np
 
 from .designs import classical as C
 from .designs.blocking import assign_blocks
-from .designs.model import model_terms
-from .designs.properties import DesignProperties, evaluate
+from .designs.model import n_params
+from .designs.optimal import custom_design
+from .designs.properties import DesignProperties, evaluate, fitted_model, power_curve
 from .designs.spec import Design, DesignSpec
 
 # Defaults for "is this design good enough to be worth considering".
 DEFAULT_MIN_POWER = 0.80
 # A main effect contaminated by more than this is treated as compromised.
 MAX_ACCEPTABLE_ALIAS = 0.5
+
+# The smallest custom design offered leaves this many degrees of freedom for
+# noise. One is enough to fit; three is the least that gives an error estimate
+# worth testing against.
+CUSTOM_MIN_RESIDUAL_DF = 3
+# Above this the custom search is not run; no bioprocess study is this big.
+CUSTOM_MAX_RUNS = 200
 
 # Weights for the overall quality score. Deliberately module-level constants
 # rather than magic numbers inside a function, because they are reported to the
@@ -96,6 +104,11 @@ def generate_candidates(spec: DesignSpec) -> list[Design]:
     k = spec.n_factors
     nc = max(spec.n_center_points, 0)
     designs: list[Design] = []
+    if spec.has_categorical:
+        # The classical families assume every factor has a low, a centre and a
+        # high. A media factor with three suppliers has none of those, so only
+        # the custom search can serve it.
+        return _finish(_custom_candidates(spec), spec)
 
     def add(factory, *args, **kwargs) -> None:
         try:
@@ -130,6 +143,13 @@ def generate_candidates(spec: DesignSpec) -> list[Design]:
         add(C.central_composite, k, alpha=alpha, n_center=max(nc, 1), core_generators=1)
     add(C.box_behnken, k, n_center=max(nc, 1))
 
+    if spec.is_constrained or spec.max_runs is not None:
+        designs += _custom_candidates(spec)
+    return _finish(designs, spec)
+
+
+def _finish(designs: list[Design], spec: DesignSpec) -> list[Design]:
+    """Deduplicate on the run matrix, then block if the spec asks for it."""
     # Deduplicate on the run matrix: several routes can land on the same design.
     unique: list[Design] = []
     seen: list[np.ndarray] = []
@@ -143,11 +163,69 @@ def generate_candidates(spec: DesignSpec) -> list[Design]:
     return unique
 
 
+def custom_run_budgets(spec: DesignSpec) -> list[int]:
+    """Run counts to search custom designs at.
+
+    With a budget, the budget itself — "I have 14 bioreactors" is the commonest
+    reason to need a custom design — plus, when categorical factors or
+    constraints rule the classical families out, the smallest sensible design
+    as the cheaper option. Without one, the smallest sensible design and the
+    size the power curve says reaches 80% (centre points on top, since they buy
+    no power), or twice the parameter count when power is unknown; when only
+    custom designs can serve, also the size that keeps 80% if the noise is
+    worse than entered, as the more thorough option.
+    """
+    levels = spec.levels
+    p = n_params(list(fitted_model(spec).terms), levels=levels) + spec.n_blocks - 1
+    smallest = p + CUSTOM_MIN_RESIDUAL_DF
+    only_custom = spec.has_categorical or spec.is_constrained
+    budgets: set[int] = set()
+    if spec.max_runs is not None:
+        if spec.max_runs > p:
+            budgets.add(spec.max_runs)
+        if only_custom and smallest < spec.max_runs:
+            budgets.add(smallest)
+    else:
+        budgets.add(smallest)
+        curve = power_curve(spec, up_to=smallest)
+        centre = max(spec.n_center_points, 0)
+        if curve is not None and curve.runs_for_80 is not None:
+            budgets.add(max(smallest, curve.runs_for_80 + centre))
+            # The thorough option: still 80% if the noise is worse than entered.
+            if only_custom and curve.runs_for_80_if_noise_high is not None:
+                budgets.add(max(smallest, curve.runs_for_80_if_noise_high + centre))
+        else:
+            budgets.add(max(smallest, 2 * p))
+    return sorted(b for b in budgets if b <= CUSTOM_MAX_RUNS)
+
+
+def _custom_candidates(spec: DesignSpec) -> list[Design]:
+    """Optimal designs at each budget, with the requested centre points when there is room.
+
+    Centre points are kept only when the runs left over can still carry the
+    model on their own; otherwise they would crowd out the runs that estimate
+    it. A search that cannot find an estimable design at a size is skipped.
+    """
+    levels = spec.levels
+    p = n_params(list(fitted_model(spec).terms), levels=levels) + spec.n_blocks - 1
+    nc = max(spec.n_center_points, 0)
+    out: list[Design] = []
+    for n_runs in custom_run_budgets(spec):
+        centre = nc if n_runs - nc >= p + 1 else 0
+        for n_center in dict.fromkeys([centre, 0]):
+            try:
+                out.append(custom_design(spec, n_runs, n_center=n_center))
+                break
+            except ValueError:
+                continue
+    return out
+
+
 def _blocked(design: Design, spec: DesignSpec) -> Design | None:
     """The same runs, split into the spec's blocks; None if they cannot be."""
-    terms = model_terms(design.n_factors, spec.model_order)
+    terms = list(fitted_model(spec).terms)
     try:
-        labels = assign_blocks(design.matrix, terms, spec.n_blocks)
+        labels = assign_blocks(design.matrix, terms, spec.n_blocks, levels=design.levels)
     except ValueError:
         return None
     return Design(
@@ -157,6 +235,7 @@ def _blocked(design: Design, spec: DesignSpec) -> Design | None:
         factor_names=list(design.factor_names),
         detail={**design.detail, "n_blocks": spec.n_blocks},
         blocks=labels,
+        levels=design.levels,
     )
 
 
@@ -233,6 +312,11 @@ def score_candidates(spec: DesignSpec, designs: list[Design] | None = None, seed
             entry.disqualified = f"needs {props.n_runs} runs, over your budget of {spec.max_runs}"
         elif spec.hard_ranges and props.prediction.axial_points_outside_range:
             entry.disqualified = "has runs outside the ranges you marked as hard limits"
+        elif props.n_infeasible_runs:
+            entry.disqualified = (
+                f"{props.n_infeasible_runs} of its runs break the constraints you set "
+                f"(classical designs cannot respect them)"
+            )
 
         if entry.is_viable:
             entry.sub_scores, entry.weights = _sub_scores(props, best_i)
@@ -290,6 +374,7 @@ def _variant_key(design: Design) -> tuple:
         design.detail.get("alpha_rule"),
         design.detail.get("fraction"),
         design.detail.get("replicates"),
+        design.detail.get("criterion"),
     )
 
 

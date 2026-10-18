@@ -8,6 +8,11 @@ assumptions without being rebuilt.
 Coding convention: every design matrix in this package is in **coded units**,
 where -1 is a factor's low setting and +1 its high setting. Conversion to real
 units happens only at the edges (``Factor.decode``, memo export).
+
+A categorical factor (media, cell line, resin) has no low or high, only named
+levels. Its column in a design matrix holds the **level index** (0, 1, ...,
+k-1); ``model.model_matrix`` expands it into k-1 effect-coded columns. Nothing
+outside ``model.py`` should do arithmetic on a level index.
 """
 
 from __future__ import annotations
@@ -40,16 +45,44 @@ class ModelOrder(StrEnum):
 
 @dataclass(frozen=True)
 class Factor:
-    """An input the scientist can set, e.g. pH or feed rate."""
+    """An input the scientist can set, e.g. pH or feed rate.
+
+    Continuous by default. Give ``levels`` (two or more names, e.g.
+    ``("media A", "media B", "media C")``) for a categorical factor; ``low`` and
+    ``high`` are then ignored and kept at 0 and k-1 so the level index decodes
+    to itself.
+    """
 
     name: str
-    low: float
-    high: float
+    low: float = 0.0
+    high: float = 1.0
     units: str = ""
+    levels: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.levels:
+            levels = tuple(str(level).strip() for level in self.levels)
+            if len(levels) < 2:
+                raise ValueError(f"factor {self.name!r}: a categorical factor needs at least 2 levels")
+            if any(not level for level in levels):
+                raise ValueError(f"factor {self.name!r}: level names cannot be blank")
+            if len(set(levels)) != len(levels):
+                raise ValueError(f"factor {self.name!r}: level names must be unique")
+            object.__setattr__(self, "levels", levels)
+            object.__setattr__(self, "low", 0.0)
+            object.__setattr__(self, "high", float(len(levels) - 1))
+            return
         if self.high == self.low:
             raise ValueError(f"factor {self.name!r}: high and low must differ")
+
+    @property
+    def is_categorical(self) -> bool:
+        return bool(self.levels)
+
+    @property
+    def n_levels(self) -> int:
+        """Number of levels for a categorical factor; 0 for a continuous one."""
+        return len(self.levels)
 
     @property
     def center(self) -> float:
@@ -60,12 +93,82 @@ class Factor:
         return (self.high - self.low) / 2.0
 
     def decode(self, coded: float | np.ndarray) -> float | np.ndarray:
-        """Coded (-1..+1) -> real units."""
+        """Coded (-1..+1) -> real units. A categorical level index is returned as is."""
+        if self.is_categorical:
+            return np.asarray(coded, dtype=float)
         return self.center + np.asarray(coded) * self.half_range
 
     def encode(self, real: float | np.ndarray) -> float | np.ndarray:
-        """Real units -> coded (-1..+1)."""
+        """Real units -> coded (-1..+1). A categorical level index is returned as is."""
+        if self.is_categorical:
+            return np.asarray(real, dtype=float)
         return (np.asarray(real) - self.center) / self.half_range
+
+    def setting(self, coded: float) -> str:
+        """One run's setting as it goes on a run sheet: ``7.1`` or ``media B``."""
+        if self.is_categorical:
+            return self.levels[int(round(float(coded)))]
+        return f"{float(self.decode(coded)):g}"
+
+    def level_index(self, label: str) -> int:
+        """Index of a named level; raises ``ValueError`` for an unknown one."""
+        try:
+            return self.levels.index(str(label).strip())
+        except ValueError as exc:
+            raise ValueError(f"factor {self.name!r} has no level {label!r}") from exc
+
+
+@dataclass(frozen=True)
+class LinearConstraint:
+    """A limit on a weighted sum of continuous factors, in **natural units**.
+
+    ``coefficients`` maps factor name to weight; the constraint is
+    ``sum(weight * setting) <= bound`` (or ``>=``). Example: total feed plus
+    glucose bolus at most 8 g/L is ``{"feed": 1, "bolus": 1} <= 8``.
+    """
+
+    coefficients: dict[str, float]
+    bound: float
+    op: str = "<="
+
+    def __post_init__(self) -> None:
+        if self.op not in ("<=", ">="):
+            raise ValueError(f"constraint operator must be '<=' or '>=', got {self.op!r}")
+        if not self.coefficients:
+            raise ValueError("a constraint needs at least one factor")
+
+    def describe(self) -> str:
+        parts = []
+        for name, weight in self.coefficients.items():
+            sign = "-" if weight < 0 else "+"
+            magnitude = abs(weight)
+            term = name if magnitude == 1 else f"{magnitude:g}*{name}"
+            parts.append(f"{sign} {term}")
+        text = " ".join(parts)
+        text = text[2:] if text.startswith("+ ") else "-" + text[2:]
+        return f"{text} {self.op} {self.bound:g}"
+
+
+@dataclass(frozen=True)
+class DisallowedCombination:
+    """Settings that cannot be run together, e.g. resin X with buffer B.
+
+    ``levels`` maps each categorical factor name to the level names that, all
+    together, make a run impossible. A run is disallowed when *every* listed
+    factor is at one of its listed levels.
+    """
+
+    levels: dict[str, tuple[str, ...]]
+
+    def __post_init__(self) -> None:
+        if not self.levels:
+            raise ValueError("a disallowed combination needs at least one factor")
+        object.__setattr__(
+            self, "levels", {name: tuple(str(v).strip() for v in values) for name, values in self.levels.items()}
+        )
+
+    def describe(self) -> str:
+        return " with ".join(f"{name} = {' or '.join(values)}" for name, values in self.levels.items())
 
 
 class ResponseGoal(StrEnum):
@@ -176,6 +279,11 @@ class DesignSpec:
     # rather than merely flagged, because no scoring axis can see a fixed
     # operating window.
     hard_ranges: bool = False
+    # Limits on where runs may go. Classical designs ignore them, so a
+    # classical design that breaks one is disqualified; the custom (optimal)
+    # generator only ever proposes runs that satisfy them.
+    constraints: list[LinearConstraint] = field(default_factory=list)
+    disallowed: list[DisallowedCombination] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if len(self.factors) < 2:
@@ -183,6 +291,31 @@ class DesignSpec:
         names = [f.name for f in self.factors]
         if len(set(names)) != len(names):
             raise ValueError(f"duplicate factor names: {names}")
+        by_name = {f.name: f for f in self.factors}
+        for constraint in self.constraints:
+            for name in constraint.coefficients:
+                if name not in by_name:
+                    raise ValueError(f"constraint names an unknown factor {name!r}")
+                if by_name[name].is_categorical:
+                    raise ValueError(f"constraint on {name!r}: only continuous factors can be in a linear constraint")
+        for combo in self.disallowed:
+            if len(combo.levels) == 1:
+                ((name, values),) = combo.levels.items()
+                raise ValueError(
+                    f"disallowed combination on {name!r} alone: a level that can never be run is not a level; "
+                    f"remove {', '.join(values)} from the factor instead"
+                )
+            for name, values in combo.levels.items():
+                if name not in by_name:
+                    raise ValueError(f"disallowed combination names an unknown factor {name!r}")
+                factor = by_name[name]
+                if not factor.is_categorical:
+                    raise ValueError(
+                        f"disallowed combination on {name!r}: only categorical factors can be listed; "
+                        "limit a continuous factor with a linear constraint instead"
+                    )
+                for value in values:
+                    factor.level_index(value)
 
     @property
     def n_factors(self) -> int:
@@ -193,8 +326,47 @@ class DesignSpec:
         return [f.name for f in self.factors]
 
     @property
+    def levels(self) -> tuple[int, ...]:
+        """Per factor: the number of levels if categorical, 0 if continuous."""
+        return tuple(f.n_levels for f in self.factors)
+
+    @property
+    def has_categorical(self) -> bool:
+        return any(f.is_categorical for f in self.factors)
+
+    @property
+    def is_constrained(self) -> bool:
+        return bool(self.constraints or self.disallowed)
+
+    @property
     def primary_response(self) -> Response | None:
         return self.responses[0] if self.responses else None
+
+    def feasible(self, matrix: np.ndarray) -> np.ndarray:
+        """Boolean mask: which coded runs satisfy every constraint.
+
+        Continuous columns are coded (-1..+1) and decoded here; categorical
+        columns hold level indices. A tiny tolerance keeps a run sitting exactly
+        on a constraint boundary feasible despite rounding.
+        """
+        matrix = np.atleast_2d(np.asarray(matrix, dtype=float))
+        ok = np.ones(matrix.shape[0], dtype=bool)
+        index = {f.name: j for j, f in enumerate(self.factors)}
+        for constraint in self.constraints:
+            total = np.zeros(matrix.shape[0])
+            for name, weight in constraint.coefficients.items():
+                j = index[name]
+                total += weight * np.asarray(self.factors[j].decode(matrix[:, j]), dtype=float)
+            scale = 1e-9 * max(1.0, abs(constraint.bound))
+            ok &= total <= constraint.bound + scale if constraint.op == "<=" else total >= constraint.bound - scale
+        for combo in self.disallowed:
+            hit = np.ones(matrix.shape[0], dtype=bool)
+            for name, values in combo.levels.items():
+                j = index[name]
+                codes = [self.factors[j].level_index(v) for v in values]
+                hit &= np.isin(np.rint(matrix[:, j]).astype(int), codes)
+            ok &= ~hit
+        return ok
 
 
 @dataclass
@@ -213,11 +385,20 @@ class Design:
     detail: dict = field(default_factory=dict)
     # Block label (0..b-1) per run, or None for an unblocked design.
     blocks: np.ndarray | None = None
+    # Per factor: number of levels if categorical, 0 if continuous. None means
+    # every factor is continuous, which is what every classical generator builds.
+    levels: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         self.matrix = np.asarray(self.matrix, dtype=float)
         if self.matrix.ndim != 2:
             raise ValueError("design matrix must be 2-dimensional")
+        if self.levels is not None:
+            self.levels = tuple(int(k) for k in self.levels)
+            if len(self.levels) != self.matrix.shape[1]:
+                raise ValueError(f"design {self.name!r}: one level count per factor is required")
+            if not any(self.levels):
+                self.levels = None
         if self.blocks is not None:
             self.blocks = np.asarray(self.blocks, dtype=int)
             if self.blocks.shape != (self.matrix.shape[0],):
@@ -237,8 +418,30 @@ class Design:
         return int(self.matrix.shape[1])
 
     @property
+    def factor_levels(self) -> tuple[int, ...]:
+        """Per factor: number of levels if categorical, 0 if continuous."""
+        return self.levels if self.levels is not None else (0,) * self.n_factors
+
+    @property
+    def continuous_columns(self) -> np.ndarray:
+        """Indices of the continuous factors."""
+        return np.array([j for j, k in enumerate(self.factor_levels) if k == 0], dtype=int)
+
+    @property
+    def center_mask(self) -> np.ndarray:
+        """Runs with every *continuous* factor at its centre.
+
+        A categorical factor has no centre, so with categorical factors a centre
+        run is one per categorical setting. With no continuous factor at all,
+        there are no centre runs."""
+        cols = self.continuous_columns
+        if cols.size == 0:
+            return np.zeros(self.n_runs, dtype=bool)
+        return np.all(np.isclose(self.matrix[:, cols], 0.0), axis=1)
+
+    @property
     def n_center_points(self) -> int:
-        return int(np.sum(np.all(np.isclose(self.matrix, 0.0), axis=1)))
+        return int(np.sum(self.center_mask))
 
     def decoded(self, factors: list[Factor]) -> np.ndarray:
         """Run matrix in real units, for the run sheet in the memo."""

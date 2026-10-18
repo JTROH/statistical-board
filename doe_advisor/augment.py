@@ -239,8 +239,10 @@ def form_from_diagnostics(coverage: dict | None = None, optimum: dict | None = N
 
     ``coverage`` (the output of ``design-coverage``) is what supplies the factor
     ranges: its ``levels`` are the settings actually run, so the previous study's
-    range is recovered from evidence rather than re-entered by hand. Categorical
-    factors are skipped -- widening a range means nothing for them.
+    range is recovered from evidence rather than re-entered by hand. A
+    categorical factor is carried over with the levels that were tested --
+    widening a range means nothing for it, but dropping it would silently
+    change the question. A factor tested at only one setting is skipped.
 
     ``response`` is an optional ``{"name", "units", "target_effect", "noise_sd",
     "goal"}`` dict carried over from the previous study.
@@ -267,7 +269,14 @@ def form_from_diagnostics(coverage: dict | None = None, optimum: dict | None = N
     skipped: list[str] = []
     for name, raw_levels in coverage["levels"].items():
         levels = _numeric_levels(raw_levels)
-        if levels is None or len(levels) < 2:
+        if levels is None:
+            names = list(dict.fromkeys(str(v) for v in raw_levels or []))
+            if len(names) < 2:
+                skipped.append(name)
+            else:
+                factors.append({"name": name, "type": "categorical", "levels": names, "units": units.get(name, "")})
+            continue
+        if len(levels) < 2:
             skipped.append(name)
             continue
         low, high = levels[0], levels[-1]

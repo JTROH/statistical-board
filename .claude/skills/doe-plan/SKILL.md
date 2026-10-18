@@ -1,6 +1,6 @@
 ---
 name: doe-plan
-description: Interactive design-of-experiments consultant — helps the user decide which experimental design fits their study, runs the shared design engine to generate and score real candidates, has a design critic attack the front-runner, and writes a run sheet CSV ready to analyse afterwards. Use when the user invokes /doe-plan, is planning an experiment, asks how many runs they need, wants a factorial/CCD/Box-Behnken design, or wants to design the follow-up to an analysis they already ran. For analysing results that already exist, use /stat-board or /stat-advisor instead.
+description: Interactive design-of-experiments consultant — helps the user decide which experimental design fits their study, runs the shared design engine to generate and score real candidates, has a design critic attack the front-runner, and writes a run sheet CSV ready to analyse afterwards. Use when the user invokes /doe-plan, is planning an experiment, asks how many runs they need, wants a factorial/CCD/Box-Behnken or custom (optimal) design, has categorical factors or constrained settings, or wants to design the follow-up to an analysis they already ran. For analysing results that already exist, use /stat-board or /stat-advisor instead.
 ---
 
 # DoE Planner — choose the experiment before you run it
@@ -21,6 +21,10 @@ Arguments, all optional:
 1. **Understand the study before naming a design.** Ask only what changes the
    answer:
    - Which **factors** can you set, and over what range (low / high, in real units)?
+     A factor with named options rather than a range — media, cell line, resin,
+     supplier — is **categorical**: ask for its levels.
+   - Are there settings that **cannot be run** — a combined limit on two feeds, a
+     resin that cannot take a buffer? Those are constraints (see the spec below).
    - What do you **measure**, and what do you want to do with it — find out which
      factors matter (*screen*), push it up or down (*maximize*/*minimize*), or hit a
      number (*target*)?
@@ -150,6 +154,26 @@ it; the proposal is evidence-led, but the ranges are still their call.
 `model_order`: `main` · `interaction` · `quadratic` (only `quadratic` can fit
 curvature). `goal`: `screen` · `maximize` · `minimize` · `target`. At least two
 factors are required. `--spec -` reads the spec from stdin.
+
+**Categorical factors:** `{"name": "media", "type": "categorical", "levels":
+["CD-A", "CD-B", "CD-C"]}` (no low/high). A categorical factor has no curvature,
+and its `target_effect` is read as the difference between two of its levels —
+say so to the user. **Constraints:** `"constraints_text": "feed + bolus <= 8\nnever
+media = CD-C with cell line = clone 2"` — one per line; a `<=`/`>=` line limits a
+weighted sum of continuous factors in natural units, a `never` line rules out a
+combination of categorical levels. (Structured forms are also accepted:
+`"constraints": [{"coefficients": {"feed": 1, "bolus": 1}, "op": "<=", "bound": 8}]`,
+`"disallowed": [{"media": ["CD-C"], "cell line": ["clone 2"]}]`.)
+
+**Custom designs.** With a categorical factor or a constraint the classical
+families cannot serve, so the engine searches for a **custom (optimal) design** by
+coordinate exchange — D-optimal for screening/interaction models, I-optimal for
+quadratic ones — at the smallest sensible size, the size the power curve says
+reaches 80%, and the size that still reaches 80% if the noise is worse. With a
+plain `max_runs` budget a custom design of exactly that size is offered alongside
+the classical ones. If a disallowed combination makes a term impossible to
+estimate by any design (e.g. part of `media x cell line`), the memo says so and
+the term is left out of the model; tell the user plainly.
 
 **Noise that grows with the level** (titres, cell counts): give the response
 `"noise_model": "cv", "noise_cv_pct": 10, "target_fold": 1.5` instead of

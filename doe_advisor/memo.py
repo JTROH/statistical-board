@@ -20,7 +20,16 @@ import numpy as np
 
 from . import __version__, figures
 from .candidates import AXIS_WEIGHTS, DEFAULT_MIN_POWER, ScoredDesign, top_options
-from .designs.properties import CURVATURE_RULE, NOISE_UPPER_CONFIDENCE, PowerCurve, noise_stress_factor, power_curve
+from .designs.model import term_label
+from .designs.properties import (
+    CATEGORICAL_RULE,
+    CURVATURE_RULE,
+    NOISE_UPPER_CONFIDENCE,
+    PowerCurve,
+    fitted_model,
+    noise_stress_factor,
+    power_curve,
+)
 from .designs.spec import DesignSpec
 from .narrate import Narration, get_narrator
 
@@ -62,19 +71,39 @@ def _fmt(value: float | None, spec: str = ".2f", dash: str = "n/a") -> str:
 
 
 def _question_section(spec: DesignSpec) -> str:
-    rows = [
-        f"| {f.name} | {f.low:g} | {f.high:g} | {f.units or '—'} |" for f in spec.factors
-    ]
+    if spec.has_categorical:
+        rows = [
+            f"| {f.name} | categorical | {', '.join(f.levels)} | {f.units or '—'} |"
+            if f.is_categorical
+            else f"| {f.name} | continuous | {f.low:g} to {f.high:g} | {f.units or '—'} |"
+            for f in spec.factors
+        ]
+        table = ["| Factor | Type | Levels or range | Units |", "|---|---|---|---|", *rows]
+    else:
+        rows = [f"| {f.name} | {f.low:g} | {f.high:g} | {f.units or '—'} |" for f in spec.factors]
+        table = ["| Factor | Low | High | Units |", "|---|---|---|---|", *rows]
     lines = [
         "## The question",
         "",
         f"Fitting **{spec.model_order.label}** across {spec.n_factors} factors.",
         "",
-        "| Factor | Low | High | Units |",
-        "|---|---|---|---|",
-        *rows,
+        *table,
         "",
     ]
+    if spec.is_constrained:
+        lines += ["Runs must also respect:", ""]
+        lines += [f"- {c.describe()}" for c in spec.constraints]
+        lines += [f"- never {d.describe()}" for d in spec.disallowed]
+        lines += [""]
+        dropped = fitted_model(spec).dropped
+        if dropped:
+            labels = ", ".join(f"**{term_label(t, spec.factor_names)}**" for t in dropped)
+            lines += [
+                f"Because of these limits, no design can estimate {labels}: the settings needed to see "
+                "it are never run. It is left out of the model, and still checked as a possible source of "
+                "bias in the aliasing section.",
+                "",
+            ]
 
     response = spec.primary_response
     if response is not None:
@@ -121,7 +150,12 @@ def _comparison_table(options: list[ScoredDesign]) -> str:
         power = props.power.min_power
         role = ROLE_LABEL.get(option.roles[0] if option.roles else "", "Alternative")
         alias = props.aliasing.worst_main_effect_alias
-        alias_text = "none" if alias == 0 else ("complete" if alias >= 0.99 else f"partial ({alias:.2f})")
+        if alias == 0:
+            alias_text = "none"
+        elif props.aliasing.main_effect_fully_aliased:
+            alias_text = "complete"
+        else:
+            alias_text = f"partial ({alias:.2f})"
         robust = (
             f"{props.robustness.fraction_estimable:.0%}" if props.robustness.applicable else "—"
         )
@@ -209,7 +243,8 @@ def _power_primer(
     lines += [
         "",
         "*Power is shown for every kind of term in the model; the score uses the weakest. "
-        f"{CURVATURE_RULE} A blank (—) means the model has no terms of that kind.*",
+        f"{CURVATURE_RULE} " + (f"{CATEGORICAL_RULE} " if spec.has_categorical else "")
+        + "A blank (—) means the model has no terms of that kind.*",
         "",
         (
             f"*The last column is the cost of the noise being worse than measured. Your noise SD comes from "
@@ -225,7 +260,8 @@ def _power_primer(
     if curve is not None:
         if curve.runs_for_80 is not None:
             need = (
-                f"**How many runs it takes.** An ideal two-level design reaches 80% power at your target "
+                f"**How many runs it takes.** An ideal {'balanced' if spec.has_categorical else 'two-level'} "
+                f"design reaches 80% power at your target "
                 f"effect with about **{curve.runs_for_80} runs**"
             )
             if curve.runs_for_80_if_noise_high is not None:
@@ -265,13 +301,20 @@ def _option_detail(option: ScoredDesign, narrative) -> str:
 
     detail = option.design.detail
     facts = [f"{props.n_runs} runs ({option.design.n_center_points} centre points)"]
+    if detail.get("algorithm") == "coordinate exchange":
+        facts.append(
+            f"{detail['criterion']}-optimal by coordinate exchange, best of {detail['n_starts']} random starts"
+        )
     if detail.get("resolution"):
         facts.append(f"resolution {detail['resolution']}")
     if detail.get("fraction") and detail["fraction"] != "full":
         facts.append(f"{detail['fraction']} fraction")
     if detail.get("alpha_rule"):
         facts.append(f"{detail['alpha_rule']} star points (alpha = {detail['alpha']:.3f})")
-    facts.append(f"{props.n_model_terms} model terms, {props.residual_df} residual df")
+    coefficients = (
+        f" ({props.n_coefficients} coefficients)" if props.n_coefficients not in (0, props.n_model_terms) else ""
+    )
+    facts.append(f"{props.n_model_terms} model terms{coefficients}, {props.residual_df} residual df")
     facts.append(f"D-efficiency {props.d_efficiency:.3f}, G-efficiency {props.prediction.g_efficiency:.0%}")
     lines += [f"<small>{'; '.join(facts)}.</small>", ""]
     return "\n".join(lines)
@@ -293,7 +336,6 @@ def _aliasing_section(options: list[ScoredDesign], spec: DesignSpec) -> str:
 
 def _run_sheet(option: ScoredDesign, spec: DesignSpec, seed: int = 0) -> str:
     design = option.design
-    decoded = design.decoded(spec.factors)
     order = design.randomised_order(seed=seed)
     blocked = design.blocks is not None
     names = " | ".join(f"{f.name}{f' ({f.units})' if f.units else ''}" for f in spec.factors)
@@ -301,7 +343,7 @@ def _run_sheet(option: ScoredDesign, spec: DesignSpec, seed: int = 0) -> str:
     divider = "|---" * (spec.n_factors + 1 + blocked) + "|"
     rows = [
         f"| {position + 1} | {f'{int(design.blocks[run]) + 1} | ' if blocked else ''}"
-        + " | ".join(f"{decoded[run, j]:g}" for j in range(spec.n_factors)) + " |"
+        + " | ".join(f.setting(design.matrix[run, j]) for j, f in enumerate(spec.factors)) + " |"
         for position, run in enumerate(order)
     ]
     return "\n".join(

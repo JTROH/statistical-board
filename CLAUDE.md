@@ -208,8 +208,24 @@ form dict → intake.spec_from_dict → DesignSpec
   come from a published minimum-aberration table; **resolution is computed from the
   defining relation, never hardcoded**, so a bad table entry fails a test instead of
   lying in the memo.
-- `alias.py` — `A = (X1'X1)^-1 X1' X2`.
+- `alias.py` — `A = (X1'X1)^-1 X1' X2`. "Completely confounded" means the potential
+  term's column is in the span of the fitted columns — not "coefficient >= 1", which
+  a non-orthogonal (constrained/optimal) design can exceed without confounding.
 - `properties.py` — power, prediction (I/D/A/G, FDS), robustness to run loss.
+  `fitted_model(spec)` is the one source of the fitted terms: it drops a term no
+  design can estimate under the spec's disallowed combinations (and reports it).
+  `region_samples(spec)` is the one definition of the prediction region (box cut
+  by constraints); the I-optimal search and the I-value both use it.
+- `optimal.py` — custom designs: Meyer–Nachtsheim coordinate exchange with
+  rank-one `(X'X)^-1` updates, D- or I-optimal, any run count, constraints, fixed
+  prior runs, partly-fixed centre runs. The only generator for categorical factors.
+
+**Categorical factors.** `Factor(levels=(...))`. In a design matrix a categorical
+column holds the *level index* (0..k-1); `model.model_matrix(..., levels=)` expands
+it into k-1 effect-coded columns (first level = -1 reference), so a 2-level
+categorical gives bit-for-bit the numbers of a ±1 continuous factor (tested). Terms
+stay at factor level; `term_slices` maps a term to its columns. Categorical power is
+the weakest pairwise level contrast (`CATEGORICAL_RULE`).
 
 `candidates.py` is where the tool's opinion lives. `AXIS_WEIGHTS` and
 `DEFAULT_MIN_POWER` are module-level constants because they are printed to the user
@@ -280,7 +296,12 @@ two execution paths, so a change to a role's stance usually belongs in both.
   computes a statistic itself.
 - **Everything inside `doe_advisor/designs/` is in coded units** (-1 low, +1 high).
   Decoding to real units happens only at the edges (`Factor.decode`, memo export,
-  `export.run_sheet_csv`).
+  `export.run_sheet_csv`). Categorical columns hold level indices: never do
+  arithmetic on them outside `model.py`, and always pass `levels=design.levels` to
+  `model_matrix` / `is_estimable` / `residual_df` — forgetting it silently treats a
+  level index as a slope.
+- **Use `fitted_model(spec).terms`, not `model_terms(...)`, wherever a spec is in
+  hand.** Otherwise a disallowed combination makes every candidate look singular.
 - **`target_effect` is the change across the full low-to-high range**, so the coded
   coefficient is half of it. Someone entering a half-range effect silently gets a
   badly underpowered design.

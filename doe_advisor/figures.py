@@ -164,6 +164,14 @@ def run_layout_chart(option: ScoredDesign, spec: DesignSpec, path: str | Path, m
         fi, fj = spec.factors[i], spec.factors[j]
         ax.set_xlabel(f"{fi.name}{f' ({fi.units})' if fi.units else ''}", fontsize=8)
         ax.set_ylabel(f"{fj.name}{f' ({fj.units})' if fj.units else ''}", fontsize=8)
+        # A categorical factor is plotted at its level index; label the ticks
+        # with the level names so the axis reads as the levels, not as numbers.
+        if fi.is_categorical:
+            ax.set_xticks(range(fi.n_levels), fi.levels, fontsize=7)
+            ax.set_xlim(-0.5, fi.n_levels - 0.5)
+        if fj.is_categorical:
+            ax.set_yticks(range(fj.n_levels), fj.levels, fontsize=7)
+            ax.set_ylim(-0.5, fj.n_levels - 0.5)
         ax.tick_params(labelsize=7)
         ax.grid(True, linewidth=0.4, alpha=0.4, zorder=0)
         ax.spines[["top", "right"]].set_visible(False)

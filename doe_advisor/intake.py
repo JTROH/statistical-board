@@ -18,11 +18,20 @@ import os
 import re
 from pathlib import Path
 
-from .designs.spec import DesignSpec, Factor, ModelOrder, Response, ResponseGoal
+from .designs.spec import (
+    DesignSpec,
+    DisallowedCombination,
+    Factor,
+    LinearConstraint,
+    ModelOrder,
+    Response,
+    ResponseGoal,
+)
 
 PRESET_DIR = Path(__file__).resolve().parent.parent / "presets"
 
 MAX_FACTORS = 10
+MAX_LEVELS = 12
 MAX_RUNS_CEILING = 10_000
 
 
@@ -118,6 +127,14 @@ def spec_from_dict(payload: dict) -> DesignSpec:
     factors = []
     for i, item in enumerate(raw_factors):
         name = str(item.get("name", "")).strip()
+        # A factor given levels but no type is categorical: there is nothing else it could be.
+        default_kind = "categorical" if item.get("levels") and item.get("low") in (None, "") else "continuous"
+        kind = str(item.get("type") or default_kind).strip().lower()
+        if kind not in ("continuous", "categorical"):
+            raise IntakeError(f"{name}: factor type must be 'continuous' or 'categorical', got {kind!r}.")
+        if kind == "categorical":
+            factors.append(_categorical_factor(name, item.get("levels"), str(item.get("units") or "").strip()))
+            continue
         low = _number(item.get("low"), f"low value for {name or f'factor {i + 1}'}")
         high = _number(item.get("high"), f"high value for {name or f'factor {i + 1}'}")
         if low == high:
@@ -130,6 +147,11 @@ def spec_from_dict(payload: dict) -> DesignSpec:
     duplicates = {n for n in names if names.count(n) > 1}
     if duplicates:
         raise IntakeError(f"Factor names must be unique; repeated: {', '.join(sorted(duplicates))}.")
+    constraints = _constraints(payload.get("constraints"), factors)
+    disallowed = _disallowed(payload.get("disallowed"), factors)
+    text_constraints, text_disallowed = parse_constraint_text(payload.get("constraints_text") or "", factors)
+    constraints += text_constraints
+    disallowed += text_disallowed
 
     responses = []
     for item in payload.get("responses") or []:
@@ -193,10 +215,13 @@ def spec_from_dict(payload: dict) -> DesignSpec:
 
     max_runs = _number(payload.get("max_runs"), "run budget", allow_none=True)
     if max_runs is not None:
-        if max_runs < len(factors) + 1:
+        # One run per main-effect coefficient plus the intercept: a k-level
+        # categorical factor needs k-1 of them.
+        floor = 1 + sum(f.n_levels - 1 if f.is_categorical else 1 for f in factors)
+        if max_runs < floor:
             raise IntakeError(
                 f"A budget of {int(max_runs)} runs cannot support {len(factors)} factors. "
-                f"You need at least {len(factors) + 1}."
+                f"You need at least {floor}."
             )
         if max_runs > MAX_RUNS_CEILING:
             raise IntakeError("That run budget is implausibly large; check the units.")
@@ -213,13 +238,193 @@ def spec_from_dict(payload: dict) -> DesignSpec:
         expected_run_losses=1 if losses is None else max(int(losses), 0),
         hard_ranges=bool(payload.get("hard_ranges", False)),
         n_blocks=_blocks(payload.get("n_blocks")),
+        constraints=constraints,
+        disallowed=disallowed,
     )
+
+
+def _categorical_factor(name: str, raw_levels, units: str) -> Factor:
+    """A categorical factor from a list of level names, or a comma-separated string."""
+    if isinstance(raw_levels, str):
+        raw_levels = raw_levels.split(",")
+    levels = [str(v).strip() for v in (raw_levels or []) if str(v).strip()]
+    if len(levels) < 2:
+        raise IntakeError(f"{name}: a categorical factor needs at least two levels, e.g. 'media A, media B'.")
+    if len(levels) > MAX_LEVELS:
+        raise IntakeError(f"{name}: at most {MAX_LEVELS} levels are supported.")
+    repeated = sorted({v for v in levels if levels.count(v) > 1})
+    if repeated:
+        raise IntakeError(f"{name}: level names must be unique; repeated: {', '.join(repeated)}.")
+    return Factor(name=name, levels=tuple(levels), units=units)
+
+
+def _constraints(raw, factors: list[Factor], line_label: str | None = None) -> list[LinearConstraint]:
+    """Linear constraints: ``{"coefficients": {"feed": 1, "bolus": 1}, "op": "<=", "bound": 8}``."""
+    by_name = {f.name: f for f in factors}
+    out = []
+    for i, item in enumerate(raw or []):
+        label = line_label or f"constraint {i + 1}"
+        coefficients = (item or {}).get("coefficients") or {}
+        if not isinstance(coefficients, dict) or not coefficients:
+            raise IntakeError(f"{label}: give the factors and their weights, e.g. {{'feed': 1, 'bolus': 1}}.")
+        parsed = {}
+        for name, weight in coefficients.items():
+            factor = by_name.get(str(name).strip())
+            if factor is None:
+                raise IntakeError(f"{label}: there is no factor called {name!r}.")
+            if factor.is_categorical:
+                raise IntakeError(
+                    f"{label}: {name} is categorical; rule out a categorical setting with a disallowed "
+                    "combination instead."
+                )
+            w = _number(weight, f"{label}: weight for {name}")
+            if w != 0:
+                parsed[factor.name] = w
+        if not parsed:
+            raise IntakeError(f"{label}: every weight is zero, so it limits nothing.")
+        op = str(item.get("op") or "<=").strip()
+        if op not in ("<=", ">="):
+            raise IntakeError(f"{label}: the operator must be '<=' or '>='.")
+        bound = _number(item.get("bound"), f"{label}: bound")
+        out.append(LinearConstraint(coefficients=parsed, bound=bound, op=op))
+    return out
+
+
+def _disallowed(raw, factors: list[Factor], line_label: str | None = None) -> list[DisallowedCombination]:
+    """Disallowed combinations: ``{"media": ["A"], "cell line": ["L2", "L3"]}`` per entry."""
+    by_name = {f.name: f for f in factors}
+    out = []
+    for i, item in enumerate(raw or []):
+        label = line_label or f"disallowed combination {i + 1}"
+        if not isinstance(item, dict) or not item:
+            raise IntakeError(f"{label}: give each categorical factor and the levels that cannot be run together.")
+        parsed = {}
+        for name, values in item.items():
+            factor = by_name.get(str(name).strip())
+            if factor is None:
+                raise IntakeError(f"{label}: there is no factor called {name!r}.")
+            if not factor.is_categorical:
+                raise IntakeError(f"{label}: {name} is continuous; limit it with a linear constraint instead.")
+            values = [values] if isinstance(values, str) else list(values or [])
+            values = [str(v).strip() for v in values if str(v).strip()]
+            unknown = [v for v in values if v not in factor.levels]
+            if unknown or not values:
+                raise IntakeError(
+                    f"{label}: {name} has levels {', '.join(factor.levels)}; got {', '.join(unknown) or 'none'}."
+                )
+            parsed[factor.name] = tuple(values)
+        if len(parsed) == 1:
+            ((name, values),) = parsed.items()
+            raise IntakeError(
+                f"{label}: ruling out {name} = {' or '.join(values)} on its own means it is never run; "
+                f"remove it from {name}'s levels instead."
+            )
+        out.append(DisallowedCombination(levels=parsed))
+    return out
+
+
+_LINEAR_RE = re.compile(r"^(?P<lhs>.+?)\s*(?P<op><=|>=|=<|=>|≤|≥)\s*(?P<bound>[-+]?[0-9.]+(?:[eE][-+]?\d+)?)$")
+_COEF_RE = re.compile(r"\s*([0-9]*\.?[0-9]+(?:[eE][-+]?\d+)?)\s*\*?\s*")
+
+
+def _linear_terms(lhs: str, factors: list[Factor], label: str) -> dict[str, float]:
+    """``feed + 2*bolus - 0.5 temp`` -> ``{"feed": 1, "bolus": 2, "temp": -0.5}``.
+
+    Scanned left to right, matching the *longest* factor name at each step, so
+    names may contain spaces, hyphens or digits ("glucose-6 feed") without
+    being split.
+    """
+    names = sorted((f.name for f in factors if not f.is_categorical), key=len, reverse=True)
+    text, pos, out = lhs.strip(), 0, {}
+    first = True
+    while pos < len(text):
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        sign = 1.0
+        if pos < len(text) and text[pos] in "+-":
+            sign = -1.0 if text[pos] == "-" else 1.0
+            pos += 1
+        elif not first:
+            raise IntakeError(f"{label}: expected + or - before {text[pos:]!r}.")
+        coef = 1.0
+        number = _COEF_RE.match(text, pos)
+        if number and not any(text.lower().startswith(n.lower(), pos) for n in names):
+            coef, pos = float(number.group(1)), number.end()
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        name = next((n for n in names if text.lower().startswith(n.lower(), pos)), None)
+        if name is None:
+            raise IntakeError(f"{label}: no continuous factor name at {text[pos:]!r}.")
+        out[name] = out.get(name, 0.0) + sign * coef
+        pos += len(name)
+        first = False
+    if not out:
+        raise IntakeError(f"{label}: no factors on the left-hand side.")
+    return out
+
+
+def _match_factor(text: str, factors: list[Factor]) -> Factor | None:
+    """The factor whose name is ``text``, ignoring case and surrounding space."""
+    wanted = text.strip().lower()
+    return next((f for f in factors if f.name.lower() == wanted), None)
+
+
+def parse_constraint_text(
+    text: str, factors: list[Factor]
+) -> tuple[list[LinearConstraint], list[DisallowedCombination]]:
+    """Constraints typed one per line, as a scientist would write them.
+
+    Two kinds of line::
+
+        feed rate + 2*glucose bolus <= 8          (a linear constraint, natural units)
+        never media = A or B with cell line = L2  (a disallowed combination)
+
+    Factor names may contain spaces; ``and`` works as well as ``with``. Blank
+    lines and lines starting with ``#`` are ignored. Errors name the line.
+    """
+    constraints: list[LinearConstraint] = []
+    disallowed: list[DisallowedCombination] = []
+    for number, raw in enumerate(str(text).splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        label = f"constraint line {number} ({line!r})"
+        if line.lower().startswith("never "):
+            parts = re.split(r"\s+(?:with|and)\s+", line[6:].strip(), flags=re.IGNORECASE)
+            combo: dict[str, list[str]] = {}
+            for part in parts:
+                if "=" not in part:
+                    raise IntakeError(f"{label}: write each setting as 'factor = level'.")
+                name, _, values = part.partition("=")
+                factor = _match_factor(name, factors)
+                if factor is None:
+                    raise IntakeError(f"{label}: there is no factor called {name.strip()!r}.")
+                combo[factor.name] = [v.strip() for v in re.split(r"\s+or\s+|,", values) if v.strip()]
+            disallowed += _disallowed([combo], factors, label)
+            continue
+        match = _LINEAR_RE.match(line)
+        if not match:
+            raise IntakeError(
+                f"{label}: expected 'a + 2*b <= 10' or 'never factor = level with factor = level'."
+            )
+        coefficients = _linear_terms(match["lhs"], factors, label)
+        op = {"=<": "<=", "≤": "<=", "=>": ">=", "≥": ">="}.get(match["op"], match["op"])
+        constraints += _constraints(
+            [{"coefficients": coefficients, "op": op, "bound": match["bound"]}], factors, label
+        )
+    return constraints, disallowed
+
+
+def _factor_to_dict(f: Factor) -> dict:
+    if f.is_categorical:
+        return {"name": f.name, "type": "categorical", "levels": list(f.levels), "units": f.units}
+    return {"name": f.name, "low": f.low, "high": f.high, "units": f.units}
 
 
 def spec_to_dict(spec: DesignSpec) -> dict:
     """Inverse of :func:`spec_from_dict`, so a spec can round-trip to the form."""
-    return {
-        "factors": [{"name": f.name, "low": f.low, "high": f.high, "units": f.units} for f in spec.factors],
+    out = {
+        "factors": [_factor_to_dict(f) for f in spec.factors],
         "responses": [
             {
                 "name": r.name,
@@ -244,6 +449,13 @@ def spec_to_dict(spec: DesignSpec) -> dict:
         "hard_ranges": spec.hard_ranges,
         "n_blocks": spec.n_blocks,
     }
+    if spec.constraints:
+        out["constraints"] = [
+            {"coefficients": dict(c.coefficients), "op": c.op, "bound": c.bound} for c in spec.constraints
+        ]
+    if spec.disallowed:
+        out["disallowed"] = [{name: list(values) for name, values in d.levels.items()} for d in spec.disallowed]
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -254,7 +466,8 @@ EXTRACTION_PROMPT = """You convert a bench scientist's plain-English description
 into the fields of a design-of-experiments intake form.
 
 Return JSON only, in this shape:
-{"factors": [{"name": "pH", "low": 6.8, "high": 7.4, "units": ""}],
+{"factors": [{"name": "pH", "low": 6.8, "high": 7.4, "units": ""},
+             {"name": "media", "type": "categorical", "levels": ["media A", "media B", "media C"]}],
  "responses": [{"name": "titer", "units": "g/L", "goal": "screen" | "maximize" | "minimize" | "target", \
 "target_value": null, "target_effect": null, "noise_sd": null}],
  "model_order": "main" | "interaction" | "quadratic",
@@ -264,6 +477,8 @@ Return JSON only, in this shape:
  "notes": ["anything you had to assume or could not find"]}
 
 Rules:
+- A factor with named options rather than a numeric range (media, cell line, resin, supplier, \
+operator) is "type": "categorical" with its "levels" listed; it has no low or high.
 - Extract only what the text actually says. Use null for anything not stated. Do NOT invent ranges, \
 target effects, or noise estimates — a guessed range that looks plausible is worse than a blank field, \
 because the scientist will not notice it.

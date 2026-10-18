@@ -160,11 +160,15 @@ def test_caveats_state_the_assumed_noise(options):
     assert any("standard deviation" in c for c in narration.caveats)
 
 
-def test_caveats_mention_the_phase_one_limits(options):
-    """The memo must not imply capabilities the tool does not yet have."""
+def test_caveats_say_where_the_designs_came_from(options):
+    """The memo says whether it searched for a custom design, and what that search can promise."""
     narration = TemplateNarrator().narrate(make_spec(), options)
     joined = " ".join(narration.caveats)
-    assert "Constrained design spaces" in joined
+    if any(o.design.family == "custom" for o in options):
+        assert "coordinate-exchange search" in joined
+        assert "does not prove it is the best" in joined
+    else:
+        assert "These are classical designs" in joined
     assert "Randomise the run order" in joined
 
 
