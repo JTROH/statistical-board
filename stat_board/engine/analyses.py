@@ -784,6 +784,24 @@ def doe_optimum(path: str, formula: str, factors: list[str], value: str) -> dict
     }
 
 
+def _design_info(model: Any) -> Any:
+    """The patsy ``DesignInfo`` a fitted formula model was built with — the
+    model's own, so its column slices always line up with ``model.exog``.
+
+    statsmodels 0.14 keeps it at ``data.design_info``; 0.15 moved it to
+    ``data.model_spec`` (and left ``design_info`` as None).
+    """
+    import patsy
+
+    data = model.model.data
+    for attr in ("design_info", "model_spec"):
+        info = getattr(data, attr, None)
+        if isinstance(info, patsy.DesignInfo):
+            return info
+    raise RuntimeError("this analysis needs statsmodels' patsy formula engine "
+                       "(is SM_FORMULA_ENGINE set to 'formulaic'?)")
+
+
 def bayes_regression(path: str, formula: str, *, r: float = bayes.REGRESSION_PRIOR_SCALE) -> dict[str, Any]:
     """Bayes factor for each term of a linear model: the full model against the
     same model without that term (all of the term's columns).
@@ -803,7 +821,7 @@ def bayes_regression(path: str, formula: str, *, r: float = bayes.REGRESSION_PRI
     model = smf.ols(formula, data=df).fit()
     y = np.asarray(model.model.endog, float)
     x = np.asarray(model.model.exog, float)
-    design_info = model.model.data.design_info
+    design_info = _design_info(model)
     n = len(y)
     tss = float(((y - y.mean()) ** 2).sum())
 
@@ -862,7 +880,7 @@ def stationary_point(path: str, formula: str, factors: list[str], *, alpha: floa
 
     df = load_dataframe(path)
     model = smf.ols(formula, data=df).fit()
-    design_info = model.model.data.design_info
+    design_info = _design_info(model)
     k = len(factors)
     lows = np.array([float(df[f].min()) for f in factors])
     highs = np.array([float(df[f].max()) for f in factors])

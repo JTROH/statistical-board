@@ -7,7 +7,9 @@ scipy>=1.14
 # The design engine (doe_advisor.designs) deliberately uses neither -- it is
 # numpy + scipy only, so it stays dependency-light.
 pandas>=2.2
-statsmodels>=0.14
+# Upper bound: 0.15 moved the patsy DesignInfo (see analyses._design_info);
+# check the next minor before widening.
+statsmodels>=0.14,<0.16
 
 # === PDF reports and memos with figures (pdstat.report + figures) ===
 markdown>=3.6
