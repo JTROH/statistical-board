@@ -1,0 +1,25 @@
+{
+  "id": "upstream_insect",
+  "label": "Insect cell fed-batch (Sf9 / baculovirus)",
+  "order": 10,
+  "description": "Bioreactor and infection factors for an Sf9 baculovirus expression (BEVS) fed-batch. Ranges are conventional starting points, not recommendations — replace them with your own process knowledge.",
+  "factors": [
+    {"name": "temperature", "low": 26.0, "high": 29.0, "units": "C"},
+    {"name": "pH", "low": 6.1, "high": 6.5, "units": ""},
+    {"name": "dissolved oxygen", "low": 30, "high": 50, "units": "%"},
+    {"name": "cell density at infection", "low": 1.0, "high": 3.0, "units": "e6 cells/mL"},
+    {"name": "MOI", "low": 0.1, "high": 2.0, "units": "pfu/cell"},
+    {"name": "feed rate", "low": 2, "high": 6, "units": "% v/v per day"}
+  ],
+  "responses": [
+    {"name": "product titer", "units": "mg/L", "goal": "maximize", "target_effect": 20, "noise_sd": 10},
+    {"name": "viability at harvest", "units": "%", "goal": "screen", "target_effect": 5.0, "noise_sd": 2.5},
+    {"name": "peak viable cell density", "units": "e6 cells/mL", "goal": "screen", "target_effect": 1.0, "noise_sd": 0.5},
+    {"name": "harvest time", "units": "h post-infection", "goal": "target", "target_value": 72, "target_effect": 12, "noise_sd": 6}
+  ],
+  "defaults": {
+    "model_order": "interaction",
+    "n_center_points": 3,
+    "expected_run_losses": 1
+  }
+}

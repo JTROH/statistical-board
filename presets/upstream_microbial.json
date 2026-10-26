@@ -1,0 +1,79 @@
+{
+  "id": "upstream_microbial",
+  "label": "Microbial fermentation (E. coli)",
+  "order": 30,
+  "description": "Bioreactor factors for a fed-batch microbial process. Ranges are conventional starting points, not recommendations — replace them with your own process knowledge.",
+  "factors": [
+    {
+      "name": "pH",
+      "low": 6.7,
+      "high": 7.3,
+      "units": ""
+    },
+    {
+      "name": "dissolved oxygen",
+      "low": 20,
+      "high": 40,
+      "units": "%"
+    },
+    {
+      "name": "temperature",
+      "low": 30.0,
+      "high": 37.0,
+      "units": "C"
+    },
+    {
+      "name": "induction OD",
+      "low": 20,
+      "high": 60,
+      "units": "OD600"
+    },
+    {
+      "name": "inducer concentration",
+      "low": 0.1,
+      "high": 1.0,
+      "units": "mM IPTG"
+    },
+    {
+      "name": "feed rate",
+      "low": 5,
+      "high": 15,
+      "units": "g/L/h"
+    }
+  ],
+  "responses": [
+    {
+      "name": "product titer",
+      "units": "g/L",
+      "goal": "maximize",
+      "target_effect": 1.0,
+      "noise_sd": 0.5
+    },
+    {
+      "name": "biomass",
+      "units": "g DCW/L",
+      "goal": "screen",
+      "target_effect": 5.0,
+      "noise_sd": 2.0
+    },
+    {
+      "name": "soluble fraction",
+      "units": "%",
+      "goal": "screen",
+      "target_effect": 10.0,
+      "noise_sd": 4.0
+    },
+    {
+      "name": "acetate",
+      "units": "g/L",
+      "goal": "minimize",
+      "target_effect": 0.5,
+      "noise_sd": 0.2
+    }
+  ],
+  "defaults": {
+    "model_order": "interaction",
+    "n_center_points": 3,
+    "expected_run_losses": 1
+  }
+}

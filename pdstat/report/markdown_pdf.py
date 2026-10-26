@@ -1,0 +1,155 @@
+"""Render a Markdown document to PDF — pure Python, no LaTeX or headless browser.
+
+Pipeline: Markdown -> HTML (python-markdown, with tables) -> PDF (PyMuPDF's
+Story layout engine).
+
+Adapted from ``stat_board/report.py`` in the statistical-board project. The
+workarounds below for PyMuPDF's Story engine are carried across deliberately:
+they encode real, previously-debugged rendering failures, and rediscovering
+them would cost more than keeping them.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import markdown as _md
+import pymupdf
+
+# A print stylesheet Story understands (it supports a practical subset of CSS).
+_CSS = """
+* { font-family: sans-serif; }
+body { font-size: 10pt; line-height: 1.4; color: #1a1a1a; }
+h1 { font-size: 19pt; margin: 0 0 6pt 0; color: #ffffff;
+     background-color: #0f5e6e; padding: 10pt 12pt; }
+h2 { font-size: 13pt; margin: 14pt 0 4pt 0; color: #0b3d47;
+     background-color: #cbeef0; padding: 5pt 10pt; }
+h3 { font-size: 11pt; margin: 10pt 0 3pt 0; color: #0f5e6e; }
+p { margin: 4pt 0; }
+em { color: #555; }
+h1 em, h1 code { color: #ffc55c; font-style: normal; background: none; }
+code { font-family: monospace; background: #f2f2f2; font-size: 9pt; }
+table { width: 100%; border-collapse: collapse; margin: 6pt 0; font-size: 9pt; }
+th { font-weight: 700; text-align: left; padding: 4pt 6pt;
+     border: 1px solid #cccccc; border-bottom: 1.5pt solid #0f5e6e; }
+td { padding: 4pt 6pt; border: 1px solid #dddddd; vertical-align: top; }
+li { margin: 2pt 0; }
+blockquote { margin: 6pt 0; padding: 4pt 10pt; background: #f7f7f7;
+             border-left: 3pt solid #0f5e6e; }
+"""
+# `th` is deliberately background-free (bold text + a teal bottom border instead)
+# rather than styled with a fill colour — see the _BG_FILLS comment below for why.
+
+
+# Background-fill colours used by the stylesheet (H1 teal, H2 light-teal, code
+# gray). PyMuPDF's Story re-draws these fills onto continuation pages where the
+# element does not actually belong — heading bands bleed into the top margin. A
+# `th` background used to be in this list too: on a table long enough to span
+# many pages, Story leaves dozens of ghost copies of that fill scattered down
+# *every* page, not just near the top — and because they land on top of
+# unrelated later table rows, the "no text under it" phantom check below does
+# not catch them (there IS text there, just not the text that fill belongs to).
+# Removing the fill at the source is simpler and more robust than trying to
+# out-guess Story's layout internals with a better heuristic.
+_BG_FILLS = [(0.06, 0.37, 0.43), (0.80, 0.93, 0.94), (0.95, 0.95, 0.95)]
+
+
+def _is_bg_fill(fill) -> bool:
+    return fill is not None and any(
+        all(abs(a - b) < 0.04 for a, b in zip(fill, c, strict=False)) for c in _BG_FILLS
+    )
+
+
+def _strip_top_bleed(doc) -> None:
+    """Remove Story's phantom background bands from continuation pages, leaving
+    text and images intact.
+
+    A fill is a phantom if it either intrudes into the top margin (a bled
+    heading band over running text) or is a stylesheet background colour with NO
+    text on it (a bled table header — a legitimate band always carries its
+    heading text). Best-effort; never fails the render.
+    """
+    try:
+        frame_top = 54.0  # matches the 0.75in top margin used when placing the story
+        for pno in range(1, doc.page_count):
+            page = doc[pno]
+            strays = []
+            for drawing in page.get_drawings():
+                fill = drawing.get("fill")
+                if fill is None:
+                    continue
+                rect = drawing["rect"]
+                if rect.width < 8 or rect.height < 3:
+                    continue
+                top_bleed = rect.y0 < frame_top - 3 and rect.width > 120
+                phantom = _is_bg_fill(fill) and rect.height < 40 and not page.get_textbox(rect).strip()
+                if top_bleed or phantom:
+                    strays.append(rect)
+            if not strays:
+                continue
+            for rect in strays:
+                page.add_redact_annot(rect)
+            page.apply_redactions(
+                text=pymupdf.PDF_REDACT_TEXT_NONE,
+                images=pymupdf.PDF_REDACT_IMAGE_NONE,
+                graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED,
+            )
+    except Exception:
+        pass
+
+
+def _shrink(path: Path) -> None:
+    """Strip the Story top-margin bleed, subset embedded fonts, and recompress.
+
+    PyMuPDF's Story embeds full fonts, which dominate the file size (a Unicode
+    fallback face alone can exceed 1 MB); subsetting to the glyphs actually used
+    typically shrinks the PDF around tenfold. Never fails the render over
+    optimisation.
+    """
+    try:
+        doc = pymupdf.open(path)
+        _strip_top_bleed(doc)
+        try:
+            doc.subset_fonts(verbose=False)
+        except Exception:
+            pass  # older PyMuPDF without subset_fonts — the deflate below still helps
+        tmp = path.with_suffix(".slim.pdf")
+        doc.save(tmp, garbage=4, deflate=True, clean=True)
+        doc.close()
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
+def markdown_to_pdf(
+    md_text: str,
+    out_path: str | Path,
+    *,
+    title: str | None = None,
+    image_root: str | Path | None = None,
+) -> Path:
+    """Convert Markdown text to a PDF file and return the output path.
+
+    If ``image_root`` is given, ``<img src="name.png">`` tags resolve against it.
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    body = _md.markdown(md_text, extensions=["tables", "fenced_code", "sane_lists", "md_in_html"])
+    head = f"<title>{title}</title>" if title else ""
+    html = f"<html><head>{head}<style>{_CSS}</style></head><body>{body}</body></html>"
+
+    archive = pymupdf.Archive(str(image_root)) if image_root else None
+    story = pymupdf.Story(html=html, archive=archive)
+    writer = pymupdf.DocumentWriter(str(out_path))
+    mediabox = pymupdf.paper_rect("letter")
+    frame = mediabox + (54, 54, -54, -54)  # 0.75in margins
+
+    more = 1
+    while more:
+        device = writer.begin_page(mediabox)
+        more, _ = story.place(frame)
+        story.draw(device)
+        writer.end_page()
+    writer.close()
+    _shrink(out_path)
+    return out_path

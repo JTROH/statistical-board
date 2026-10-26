@@ -1,0 +1,167 @@
+"""Write a design out as a CSV the analysis half of this package can read back.
+
+The memo's run sheet (:func:`doe_advisor.memo._run_sheet`) is a Markdown table
+for a human to print. This module writes the same runs as a CSV for a machine:
+one row per run in execution order, with an **empty column per response** for
+the scientist to fill in at the bench.
+
+The column layout deliberately matches ``sample_data/DOE_sample_dataset.csv``,
+which is the shape ``stat_board`` already analyses::
+
+    run_order,run_type,glucose_coded,glucose_g_l,...,titre_g_l
+
+Coded and natural units are both written. The coded columns are what the design
+was built in; the natural ones are what the scientist sets on the equipment, and
+what ``stat_board``'s ``--factor`` flags should name. A categorical factor has no
+coded column — its setting is a level name, written as is.
+"""
+
+from __future__ import annotations
+
+import csv
+import re
+from pathlib import Path
+
+import numpy as np
+
+from .designs.spec import Design, DesignSpec, Factor
+
+
+def _slug(text: str) -> str:
+    """A column-safe version of a factor or response name."""
+    out = re.sub(r"[^0-9a-zA-Z]+", "_", text.strip().lower()).strip("_")
+    return out or "col"
+
+
+def natural_column(factor: Factor) -> str:
+    """The natural-units column name for a factor, units folded in when given."""
+    return _slug(f"{factor.name}_{factor.units}") if factor.units else _slug(factor.name)
+
+
+def response_column(name: str, units: str = "") -> str:
+    return _slug(f"{name}_{units}") if units else _slug(name)
+
+
+def run_type(coded_row: np.ndarray, levels: tuple[int, ...] | None = None) -> str:
+    """Classify one run from its coded coordinates alone.
+
+    Derived, not stored: the generators do not tag individual runs, and inventing
+    per-run metadata just for the export would be a second source of truth about
+    what a run is. Only continuous coordinates count — a categorical level index
+    is not a position in the box. With no continuous factor every run is a
+    ``factorial`` one.
+    """
+    coded_row = np.asarray(coded_row, dtype=float)
+    if levels is not None:
+        coded_row = coded_row[[j for j, k in enumerate(levels) if not k]]
+    if coded_row.size and np.all(np.isclose(coded_row, 0.0)):
+        return "center"
+    if np.any(np.abs(coded_row) > 1.0 + 1e-9):
+        return "axial"
+    return "factorial"
+
+
+def run_sheet_rows(design: Design, spec: DesignSpec, *, seed: int = 0) -> tuple[list[str], list[list]]:
+    """(header, rows) for the run sheet, in randomised execution order."""
+    decoded = design.decoded(spec.factors)
+    order = design.randomised_order(seed=seed)
+
+    blocked = design.blocks is not None
+    split = design.whole_plots is not None
+    header = ["run_order"] + (["block"] if blocked else []) + (["whole_plot"] if split else []) + ["run_type"]
+    # Whole plots are numbered 1, 2, ... in the order they are run.
+    plot_number = {}
+    if split:
+        for run in order:
+            plot_number.setdefault(int(design.whole_plots[run]), len(plot_number) + 1)
+    for factor in spec.factors:
+        if factor.is_categorical:
+            header.append(natural_column(factor))
+        else:
+            header += [f"{_slug(factor.name)}_coded", natural_column(factor)]
+    header += [response_column(r.name, r.units) for r in spec.responses]
+
+    rows: list[list] = []
+    for position, run in enumerate(order):
+        coded_row = design.matrix[run]
+        row: list = [position + 1]
+        if blocked:
+            row.append(int(design.blocks[run]) + 1)  # 1-based on the bench sheet
+        if split:
+            row.append(plot_number[int(design.whole_plots[run])])
+        row.append(run_type(coded_row, design.levels))
+        for j, factor in enumerate(spec.factors):
+            if factor.is_categorical:
+                row.append(factor.setting(coded_row[j]))
+            else:
+                row += [f"{coded_row[j]:g}", f"{decoded[run, j]:g}"]
+        row += [""] * len(spec.responses)  # the scientist fills these in
+        rows.append(row)
+    return header, rows
+
+
+def run_sheet_csv(design: Design, spec: DesignSpec, out_path: str | Path, *, seed: int = 0) -> Path:
+    """Write the run sheet to ``out_path`` as CSV and return the path."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    header, rows = run_sheet_rows(design, spec, seed=seed)
+    with out_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(header)
+        writer.writerows(rows)
+    return out_path
+
+
+def analysis_hint(spec: DesignSpec) -> dict:
+    """How to hand this run sheet to ``stat_board`` once the responses are in.
+
+    Returned as data rather than printed prose so the CLI, the web app and the
+    ``/doe-plan`` skill all quote the *same* command instead of each composing
+    its own.
+    """
+    factors = [natural_column(f) for f in spec.factors]
+    # C() makes a categorical factor categorical even when its level names are
+    # numbers ("lot 1, 2, 3" read back as integers would be fitted as a slope).
+    terms = [f"C({col})" if f.is_categorical else col for f, col in zip(spec.factors, factors, strict=True)]
+    responses = [response_column(r.name, r.units) for r in spec.responses]
+    value = responses[0] if responses else "<response>"
+    log = bool(spec.responses) and spec.responses[0].is_log
+    lhs = f"np.log10({value})" if log else value
+    formula = f"{lhs} ~ " + " * ".join(terms) if terms else ""
+    if formula and spec.n_blocks > 1:
+        # The block offset is fitted, never interpreted: it is there to remove
+        # day-to-day shifts, not to be tested as a finding.
+        formula += " + C(block)"
+    split = spec.is_split_plot
+    notes = []
+    if log:
+        notes.append(
+            f"The design was powered for log10 {spec.responses[0].name}. Record raw values; analyse the "
+            f"log10 (the formula above does). Ask the board to analyse on the log10 scale."
+        )
+    if split:
+        notes.append(
+            "This is a split-plot design: runs in one whole plot share their hard-to-change settings and are "
+            "not independent. Analyse it as a mixed model with whole_plot as the grouping column (the "
+            "mixed_model command below) — an ordinary regression overstates the evidence for "
+            + ", ".join(f.name for f in spec.factors if f.hard_to_change) + "."
+        )
+    return {
+        "factor_columns": factors,
+        "categorical_columns": [col for f, col in zip(spec.factors, factors, strict=True) if f.is_categorical],
+        "response_columns": responses,
+        "formula": formula,
+        "response_scale": "log10" if log else "raw",
+        "note": " ".join(notes) or None,
+        "groups": "whole_plot" if split else None,
+        "mixed_model": (
+            f"python3 -m stat_board.engine mixed-model --data <run sheet>.csv --formula \"{formula}\" "
+            "--groups whole_plot"
+            if split
+            else None
+        ),
+        "skill": "/stat-board data=<run sheet>.csv question=\"...\" "
+                 + f"value={value} " + " ".join(f"factor={f}" for f in factors),
+        "cli": "python3 -m stat_board \"<your question>\" --data <run sheet>.csv "
+               + f"--value-col {value} " + " ".join(f"--factor {f}" for f in factors),
+    }

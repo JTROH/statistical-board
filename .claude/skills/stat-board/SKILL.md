@@ -133,6 +133,15 @@ The final report always ships as a **PDF**.
      underpowered, extending a factor's range if the best setting sits at its
      tested boundary, resolving a high-VIF confound). Never invent a
      recommendation the diagnostics don't support.
+
+     Then close that section by pointing at the design half of this package,
+     which can *build* the follow-up rather than only describe it:
+
+     > To turn these into an actual design, run
+     > `/doe-plan augment=reports/<slug>.transcript.json` — it reads the same four
+     > diagnostics and proposes the next study (widened ranges where an optimum sat
+     > at a boundary, a curvature-capable design where centre runs showed a bend),
+     > then writes the run sheet.
 2. **Render the PDF** — the deliverable — by running, from the project root, and
    **passing the dataset** so the renderer appends a deterministic appendix
    computed straight from the data (never hand-roll a one-off plotting/analysis

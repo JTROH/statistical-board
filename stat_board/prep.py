@@ -94,8 +94,13 @@ def _looks_yyyymmdd(s: pd.Series) -> bool:
         and bool((v.astype(str).str.len() == 8).mean() > 0.9)
 
 
+def _is_text(s: pd.Series) -> bool:
+    # pandas 2 stores text as object; pandas 3 defaults to the "str" StringDtype.
+    return pd.api.types.is_object_dtype(s) or isinstance(s.dtype, pd.StringDtype)
+
+
 def _looks_datestr(s: pd.Series) -> bool:
-    if not pd.api.types.is_object_dtype(s):
+    if not _is_text(s):
         return False
     sample = s.dropna().astype(str).head(20)
     if len(sample) == 0:
@@ -107,7 +112,7 @@ def _looks_datestr(s: pd.Series) -> bool:
 
 
 def _numeric_as_text(s: pd.Series) -> bool:
-    if not pd.api.types.is_object_dtype(s):
+    if not _is_text(s):
         return False
     sample = s.dropna().astype(str).head(50)
     if len(sample) == 0:

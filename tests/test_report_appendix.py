@@ -231,3 +231,24 @@ def test_pdf_with_a_large_multipage_table_has_no_stray_th_background_ghosts(tmp_
         if d.get("fill") and all(abs(a - b) < 0.01 for a, b in zip(d["fill"], stray_th_fill, strict=False))
     )
     assert ghosts == 0
+
+
+def test_build_multifactor_quadratic_design_reports_fit_checks_and_stationary_point(tmp_path):
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(2)
+    c = np.array([(-1, -1), (1, -1), (-1, 1), (1, 1), (-1, 0), (1, 0), (0, -1), (0, 1)] * 2 + [(0, 0)] * 4, float)
+    y = 40 - 5 * (c[:, 0] - 0.2) ** 2 - 4 * (c[:, 1] + 0.1) ** 2 + rng.normal(0, 0.3, len(c))
+    path = tmp_path / "rsm.csv"
+    pd.DataFrame({"a": c[:, 0], "b": c[:, 1], "y": y}).to_csv(path, index=False)
+    md, _ = appendix.build_multifactor(str(path), "y ~ a * b + I(a**2) + I(b**2)",
+                                       factors=["a", "b"], assets_dir=tmp_path / "assets")
+    assert "Lack of fit (vs pure error" in md
+    assert "Constant variance (Breusch–Pagan)" in md
+    assert "**Stationary point** (canonical analysis): a **maximum**" in md
+
+
+def test_build_multifactor_says_why_there_is_no_stationary_point(tmp_path, reg_csv):
+    md, _ = appendix.build_multifactor(str(reg_csv), "y ~ x", factors=["x"], assets_dir=tmp_path / "assets")
+    assert "**Stationary point**: not computed" in md

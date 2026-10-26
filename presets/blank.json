@@ -1,0 +1,39 @@
+{
+  "id": "blank",
+  "label": "Start from scratch",
+  "description": "No pre-filled factors. Use this when your process does not resemble any template.",
+  "factors": [
+    {
+      "name": "",
+      "low": 0,
+      "high": 1,
+      "units": ""
+    },
+    {
+      "name": "",
+      "low": 0,
+      "high": 1,
+      "units": ""
+    },
+    {
+      "name": "",
+      "low": 0,
+      "high": 1,
+      "units": ""
+    }
+  ],
+  "responses": [
+    {
+      "name": "",
+      "units": "",
+      "goal": "screen",
+      "target_effect": null,
+      "noise_sd": null
+    }
+  ],
+  "defaults": {
+    "model_order": "interaction",
+    "n_center_points": 3,
+    "expected_run_losses": 1
+  }
+}

@@ -12,7 +12,10 @@ that depends on the prior. Treat every claim as unverified until checked.
 YOUR ROLE: recast the evidence in Bayesian terms and flag frequentist overreach.
 
 - **Bayes factor.** Use the analyst's `bayes-ttest` output (BF10), or run it
-  yourself: `python3 -m stat_board.engine bayes-ttest --data ...`. Translate it
+  yourself: `python3 -m stat_board.engine bayes-ttest --data ...`. For a
+  regression / DoE model use `bayes-regression --data ... --formula "..."`
+  (one BF per term: full model vs without that term; `--r 0.5` or `--r 1` for
+  prior sensitivity). Translate it
   into plain evidence language (anecdotal / moderate / strong / extreme) and
   compare it against the frequentist verdict.
 - **p ≠ evidence.** A p just under 0.05 is often only *anecdotal* evidence by

@@ -431,11 +431,106 @@ def _fit_and_anova(path: str, formula: str, *, typ: int = 2, alpha: float = 0.05
         w, p = stats.shapiro(resid)
         diagnostics.update(resid_shapiro_W=float(w), resid_shapiro_p=float(p),
                            resid_normal_at_alpha=bool(p > alpha))
+    exog = np.asarray(model.model.exog, float)
+    if exog.shape[1] > 1 and len(resid) > exog.shape[1]:
+        from statsmodels.stats.diagnostic import het_breuschpagan
+
+        _, _, bp_f, bp_p = het_breuschpagan(resid, exog)
+        diagnostics.update(breusch_pagan_F=float(bp_f), breusch_pagan_p=float(bp_p),
+                           constant_variance_at_alpha=bool(bp_p > alpha))
     return {
         "formula": formula, "typ": typ, "n": int(model.nobs),
         "r_squared": float(model.rsquared), "adj_r_squared": float(model.rsquared_adj),
         "f_pvalue": float(model.f_pvalue), "aic": float(model.aic), "bic": float(model.bic),
+        "residual_sd": float(np.sqrt(model.scale)), "residual_df": int(model.df_resid),
         "anova": terms, "coefficients": coefs, "residual_diagnostics": diagnostics,
+        "lack_of_fit": _lack_of_fit(model, alpha),
+    }
+
+
+def _lack_of_fit(model, alpha: float) -> dict[str, Any] | None:
+    """Lack-of-fit F test: does the model's residual scatter exceed the scatter
+    between true replicates (runs with identical settings)?
+
+    Needs replicated settings (e.g. centre points) for pure error, and more
+    distinct settings than model parameters. Returns ``None`` when either is
+    missing — the test cannot be done, which is not the same as passing it.
+    A significant result means the model shape is wrong (missing curvature or
+    interaction), not that the noise is large.
+    """
+    exog = np.round(np.asarray(model.model.exog, float), 9)
+    endog = np.asarray(model.model.endog, float)
+    n, p = exog.shape
+    _, group = np.unique(exog, axis=0, return_inverse=True)
+    group = np.asarray(group).ravel()
+    n_settings = int(group.max()) + 1
+    df_pe, df_lof = n - n_settings, n_settings - p
+    if df_pe <= 0 or df_lof <= 0:
+        return None
+    ss_pe = float(sum(((endog[group == g] - endog[group == g].mean()) ** 2).sum() for g in range(n_settings)))
+    ss_lof = float(model.ssr) - ss_pe
+    if ss_pe <= 0:
+        return None
+    f = (ss_lof / df_lof) / (ss_pe / df_pe)
+    p_value = float(stats.f.sf(f, df_lof, df_pe))
+    return {
+        "ss_lack_of_fit": ss_lof, "df_lack_of_fit": int(df_lof),
+        "ss_pure_error": ss_pe, "df_pure_error": int(df_pe),
+        "pure_error_sd": float(np.sqrt(ss_pe / df_pe)),
+        "F": float(f), "p": p_value, "lack_of_fit_at_alpha": bool(p_value < alpha),
+    }
+
+
+def box_cox(path: str, formula: str, *, alpha: float = 0.05) -> dict[str, Any]:
+    """Box-Cox profile for the response of a linear model: which power
+    transform y^lambda makes the model's residuals best behaved.
+
+    Returns the best lambda and its (1 - alpha) likelihood interval. Read it as:
+    1 inside the interval -> no transform needed; 0 inside -> a log scale is
+    supported (typical for titres, whose noise grows with the level).
+    The response must be strictly positive.
+    """
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    y = np.asarray(model.model.endog, float)
+    x = np.asarray(model.model.exog, float)
+    if np.any(y <= 0):
+        raise ValueError("Box-Cox needs a strictly positive response")
+    n = len(y)
+    log_gm = float(np.mean(np.log(y)))
+
+    def loglik(lam: float) -> float:
+        # Scaled by the geometric mean so residual sums of squares are comparable across lambda.
+        if abs(lam) < 1e-9:
+            z = np.exp(log_gm) * np.log(y)
+        else:
+            z = (y**lam - 1.0) / (lam * np.exp(log_gm * (lam - 1.0)))
+        beta, *_ = np.linalg.lstsq(x, z, rcond=None)
+        rss = float(((z - x @ beta) ** 2).sum())
+        return -0.5 * n * np.log(rss / n)
+
+    grid = np.round(np.arange(-3.0, 3.0 + 1e-9, 0.01), 2)
+    ll = np.array([loglik(lam) for lam in grid])
+    best = int(np.argmax(ll))
+    cut = ll[best] - 0.5 * stats.chi2.ppf(1.0 - alpha, 1)
+    inside = grid[ll >= cut]
+    low, high = float(inside.min()), float(inside.max())
+    if low <= 1.0 <= high:
+        advice = "1 is inside the interval: no transform is needed."
+    elif low <= 0.0 <= high:
+        advice = "0 is inside the interval and 1 is not: analyse the log of the response."
+    else:
+        advice = f"Neither 0 nor 1 is inside the interval: consider y^{grid[best]:g}."
+    return {
+        "analysis": "box_cox", "formula": formula, "n": n, "alpha": alpha,
+        "lambda": float(grid[best]), "ci": [low, high],
+        "includes_1": bool(low <= 1.0 <= high), "includes_0": bool(low <= 0.0 <= high),
+        "interval_hits_search_edge": bool(low <= grid[0] or high >= grid[-1]),
+        "advice": advice,
     }
 
 
@@ -687,6 +782,480 @@ def doe_optimum(path: str, formula: str, factors: list[str], value: str) -> dict
         "note": "Predictions are evaluated only at each factor's ACTUALLY TESTED "
                 "levels -- this never claims an interior/untested optimum.",
     }
+
+
+def _design_info(model: Any) -> Any:
+    """The patsy ``DesignInfo`` a fitted formula model was built with — the
+    model's own, so its column slices always line up with ``model.exog``.
+
+    statsmodels 0.14 keeps it at ``data.design_info``; 0.15 moved it to
+    ``data.model_spec`` (and left ``design_info`` as None).
+    """
+    import patsy
+
+    data = model.model.data
+    for attr in ("design_info", "model_spec"):
+        info = getattr(data, attr, None)
+        if isinstance(info, patsy.DesignInfo):
+            return info
+    raise RuntimeError("this analysis needs statsmodels' patsy formula engine "
+                       "(is SM_FORMULA_ENGINE set to 'formulaic'?)")
+
+
+def bayes_regression(path: str, formula: str, *, r: float = bayes.REGRESSION_PRIOR_SCALE) -> dict[str, Any]:
+    """Bayes factor for each term of a linear model: the full model against the
+    same model without that term (all of the term's columns).
+
+    JZS / Zellner-Siow prior with every predictor sharing one g — the same
+    numbers as R's ``BayesFactor::regressionBF`` / ``lmBF`` for continuous
+    predictors (a categorical term such as ``C(block)`` is treated as its
+    dummy columns under the same g, which BayesFactor does differently).
+    BF10 > 1 favours keeping the term; BF10 < 1 is evidence it does nothing,
+    which a p-value can never give.
+    """
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    y = np.asarray(model.model.endog, float)
+    x = np.asarray(model.model.exog, float)
+    design_info = _design_info(model)
+    n = len(y)
+    tss = float(((y - y.mean()) ** 2).sum())
+
+    def r2_of(columns: list[int]) -> float:
+        beta, *_ = np.linalg.lstsq(x[:, columns], y, rcond=None)
+        return 1.0 - float(((y - x[:, columns] @ beta) ** 2).sum()) / tss
+
+    intercept = [i for i, name in enumerate(design_info.column_names) if name == "Intercept"]
+    if not intercept:
+        raise ValueError("the formula needs an intercept for these Bayes factors")
+    all_cols = list(range(x.shape[1]))
+    p_full = x.shape[1] - 1
+    log_bf_full = np.log(bayes.bayesfactor_r2(n, p_full, r2_of(all_cols), r=r))
+
+    terms = []
+    for term_name, cols in design_info.term_name_slices.items():
+        if term_name == "Intercept":
+            continue
+        dropped = set(range(cols.start, cols.stop))
+        kept = [i for i in all_cols if i not in dropped]
+        p_reduced = len(kept) - 1
+        log_bf_reduced = 0.0 if p_reduced == 0 else np.log(bayes.bayesfactor_r2(n, p_reduced, r2_of(kept), r=r))
+        bf10 = float(np.exp(log_bf_full - log_bf_reduced))
+        terms.append({"term": term_name, "bf10": bf10, "bf01": 1.0 / bf10,
+                      "interpretation": bayes.interpret_bf(bf10)})
+    return {
+        "analysis": "bayes_regression", "formula": formula, "n": n, "prior_scale": r,
+        "model_bf10_vs_intercept": float(np.exp(log_bf_full)),
+        "terms": terms,
+        "note": "Each BF compares the full model with the model lacking that term (JZS prior, one shared g). "
+                "Terms involved in an interaction are compared with the interaction still present.",
+    }
+
+
+def stationary_point(path: str, formula: str, factors: list[str], *, alpha: float = 0.05) -> dict[str, Any]:
+    """Canonical analysis of a fitted second-order model: where the surface is
+    flat, whether that point is a maximum, minimum or saddle, and how precisely
+    it is located.
+
+    Complements ``doe-optimum``, which ranks only tested settings. This one may
+    land between them — or outside the tested region, which it flags rather
+    than hides. The location's CI is a delta-method interval: a ratio of noisy
+    coefficients, so it is approximate and widens fast when the curvature is
+    weak.
+
+    Works for any formula that is quadratic in ``factors`` (main effects,
+    interactions, squared terms, in natural units, with or without other
+    columns, which are held at their mean / mode). The gradient and Hessian are
+    read off the model's own design matrix by central differences, exact for a
+    quadratic; a formula that is not quadratic is refused, not approximated.
+    """
+    import patsy
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    model = smf.ols(formula, data=df).fit()
+    design_info = _design_info(model)
+    k = len(factors)
+    lows = np.array([float(df[f].min()) for f in factors])
+    highs = np.array([float(df[f].max()) for f in factors])
+    centre, half = (lows + highs) / 2.0, (highs - lows) / 2.0
+    if np.any(half <= 0):
+        raise ValueError("every factor needs at least two tested levels")
+    ref = {}
+    for c in df.columns:
+        if c not in factors:
+            ref[c] = df[c].mean() if pd.api.types.is_numeric_dtype(df[c]) else df[c].mode().iloc[0]
+
+    def rows(coded: np.ndarray) -> np.ndarray:
+        """Design-matrix rows for points given in coded units (-1..+1 = tested range)."""
+        coded = np.atleast_2d(coded)
+        frame = pd.DataFrame([{**ref, **dict(zip(factors, centre + half * u, strict=True))} for u in coded])
+        return np.asarray(patsy.build_design_matrices([design_info], frame)[0], float)
+
+    # Linear operators: gradient G (k x p) and Hessian Hs (k x k x p) at the
+    # centre, so that g = G @ beta and H = Hs @ beta for any coefficient vector.
+    d = 0.5
+    eye = np.eye(k)
+    x0 = rows(np.zeros(k))[0]
+    G = np.array([(rows(d * eye[i])[0] - rows(-d * eye[i])[0]) / (2 * d) for i in range(k)])
+    Hs = np.empty((k, k, x0.size))
+    for i in range(k):
+        Hs[i, i] = (rows(d * eye[i])[0] - 2 * x0 + rows(-d * eye[i])[0]) / d**2
+        for j in range(i + 1, k):
+            Hs[i, j] = Hs[j, i] = (
+                rows(d * (eye[i] + eye[j]))[0] - rows(d * (eye[i] - eye[j]))[0]
+                - rows(d * (-eye[i] + eye[j]))[0] + rows(-d * (eye[i] + eye[j]))[0]
+            ) / (4 * d**2)
+
+    # Refuse anything that is not exactly quadratic in the factors.
+    probe = np.random.default_rng(0).uniform(-1.5, 1.5, size=(8, k))
+    quad = x0 + probe @ G + 0.5 * np.einsum("ni,ijp,nj->np", probe, Hs, probe)
+    if not np.allclose(rows(probe), quad, atol=1e-8 * max(1.0, float(np.abs(rows(probe)).max()))):
+        raise ValueError("the formula is not quadratic in the given factors; canonical analysis needs a "
+                         "second-order model (main effects, interactions, squared terms)")
+
+    # Structural check, before looking at any estimate: an interaction-only
+    # model has a Hessian too, but calling it a saddle would report the
+    # formula, not the data.
+    missing = [f for i, f in enumerate(factors) if not np.any(np.abs(Hs[i, i]) > 1e-12)]
+    if missing:
+        raise ValueError(f"no squared term for {', '.join(missing)}: the model has no curvature in that "
+                         "direction, so it cannot locate an optimum (add I(x**2) for every factor)")
+
+    beta = np.asarray(model.params, float)
+    cov = np.asarray(model.cov_params(), float)
+    g, H = G @ beta, Hs @ beta
+    eigvals = np.linalg.eigvalsh(H)
+    if np.min(np.abs(eigvals)) < 1e-12 * max(1.0, float(np.abs(eigvals).max())):
+        raise ValueError("the fitted surface has no curvature along some direction (singular Hessian); "
+                         "a squared term for every factor is needed")
+    u = -np.linalg.solve(H, g)  # stationary point, coded units
+
+    # Delta method: du/dbeta_j = -H^-1 (G_j + Hs_j u).
+    H_inv = np.linalg.inv(H)
+    J = -H_inv @ (G + np.einsum("ijp,j->ip", Hs, u))
+    se_u = np.sqrt(np.clip(np.diag(J @ cov @ J.T), 0.0, None))
+    tcrit = float(stats.t.ppf(1 - alpha / 2, model.df_resid))
+
+    natural = centre + half * u
+    se_nat = half * se_u
+    kind = "maximum" if np.all(eigvals < 0) else ("minimum" if np.all(eigvals > 0) else "saddle")
+    point = {**ref, **dict(zip(factors, natural, strict=True))}
+    pred = model.get_prediction(pd.DataFrame([point])).summary_frame(alpha=alpha).iloc[0]
+    location = {}
+    for i, f in enumerate(factors):
+        location[f] = {
+            "value": float(natural[i]), "std_err": float(se_nat[i]),
+            "ci": [float(natural[i] - tcrit * se_nat[i]), float(natural[i] + tcrit * se_nat[i])],
+            "tested_range": [float(lows[i]), float(highs[i])],
+            "inside_tested_range": bool(lows[i] - 1e-9 <= natural[i] <= highs[i] + 1e-9),
+        }
+    inside = all(v["inside_tested_range"] for v in location.values())
+    if kind == "saddle":
+        verdict = ("The surface is a saddle: it rises in some directions and falls in others, so there is "
+                   "no single best setting. Use doe-optimum for the best tested setting.")
+    elif not inside:
+        verdict = (f"The fitted {kind} lies outside the tested region; the model cannot vouch for it. "
+                   "Treat it as a direction to explore, not a setting to run.")
+    else:
+        verdict = f"The fitted surface has a {kind} inside the tested region."
+    return {
+        "analysis": "stationary_point", "formula": formula, "factors": factors, "alpha": alpha,
+        "kind": kind, "inside_tested_region": inside, "location": location,
+        "predicted": float(pred["mean"]),
+        "predicted_ci": [float(pred["mean_ci_lower"]), float(pred["mean_ci_upper"])],
+        "eigenvalues_coded": [float(v) for v in eigvals],
+        "verdict": verdict,
+        "note": "Location CIs are delta-method approximations; they are unreliable when the "
+                "curvature itself is barely significant.",
+    }
+
+
+def _containment_df(exog: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, int, int]:
+    """(whole-plot flag per column, whole-plot df, within-plot df) by the containment rule.
+
+    A column constant within every group (the intercept, a hard-to-change
+    factor) is estimated from group totals, so it is tested on
+    g - p_between degrees of freedom; any other column on n - g - p_within.
+    """
+    groups = np.unique(labels)
+    between = np.ones(exog.shape[1], dtype=bool)
+    for g in groups:
+        rows = exog[labels == g]
+        if rows.shape[0] > 1:
+            between &= np.ptp(rows, axis=0) <= 1e-9 * np.maximum(1.0, np.abs(rows).max(axis=0))
+    n_between = int(between.sum())
+    return between, groups.size - n_between, exog.shape[0] - groups.size - (exog.shape[1] - n_between)
+
+
+def mixed_model(path: str, formula: str, groups: str, *, alpha: float = 0.05) -> dict[str, Any]:
+    """Linear mixed model with a random intercept per group — the analysis a
+    split-plot (or any grouped) experiment needs.
+
+    Runs that share a whole plot (one incubator temperature, one media batch,
+    one plate) share a random offset, so they are not independent. Analysing
+    them by OLS treats the hard-to-change factors as if they had been reset
+    every run, and their p-values come out far too small. Here the fit is REML
+    and every fixed effect is tested on the right degrees of freedom by the
+    containment rule: a term constant within every group (a whole-plot term)
+    against the number of groups, everything else against the runs within
+    groups. Each term also gets a Wald F test on all of its columns.
+
+    ``groups`` is the column naming the whole plot (``whole_plot`` on a
+    split-plot run sheet).
+    """
+    import warnings
+
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    if groups not in df.columns:
+        raise ValueError(f"no column called {groups!r} to group runs by")
+    df = df.dropna(subset=[groups])
+    model = smf.mixedlm(formula, df, groups=df[groups])
+    fit = None
+    messages: list[str] = []
+    # L-BFGS with tight stopping rules: statsmodels' defaults stop about 1e-5
+    # short of the REML optimum, and Kenward-Roger's df and scaling inherit that
+    # error. These agree with lme4 to ~1e-9 (validation/validate_kr.R).
+    tight = {"lbfgs": {"pgtol": 1e-12, "factr": 10.0}}
+    for method in ("lbfgs", "powell", "nm"):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                candidate = model.fit(reml=True, method=method, **tight.get(method, {}))
+            except (np.linalg.LinAlgError, ValueError) as exc:
+                messages.append(f"{method}: {exc}")
+                continue
+        if fit is None or candidate.llf > fit.llf:
+            fit = candidate
+            messages = [str(w.message) for w in caught if "converge" in str(w.message).lower()]
+        if candidate.converged:
+            break
+    if fit is None:
+        raise ValueError("the mixed model could not be fitted: " + "; ".join(messages))
+
+    k_fe = model.k_fe
+    names = list(model.exog_names[:k_fe])
+    exog = np.asarray(model.exog, float)
+    labels = np.asarray(df[groups])
+    between, df_wp, df_sp = _containment_df(exog, labels)
+    beta = np.asarray(fit.fe_params, float)
+    var_resid = float(fit.scale)
+    var_group = max(float(np.asarray(fit.cov_re)[0, 0]), 0.0)
+    boundary = var_group <= 1e-8 * max(var_resid, 1e-300)
+
+    try:
+        kr = _kenward_roger(exog, labels, var_group, var_resid)
+    except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+        kr = None
+    phi = kr["phi"] if kr else np.asarray(fit.cov_params(), float)[:k_fe, :k_fe]
+
+    def containment(is_between: bool) -> int:
+        return df_wp if is_between else df_sp
+
+    coefs = {}
+    for j, name in enumerate(names):
+        l_vec = np.zeros(k_fe)
+        l_vec[j] = 1.0
+        d_cont = containment(bool(between[j]))
+        se_plain = float(np.sqrt(phi[j, j]))
+        test = _kr_test(l_vec[None, :], beta, kr) if kr else None
+        if test is not None:
+            se, d = float(np.sqrt(kr["phi_a"][j, j])), test["den_df"]
+        else:
+            se, d = se_plain, float(d_cont)
+        t = beta[j] / se if se > 0 else float("nan")
+        p_val = float(2 * stats.t.sf(abs(t), d)) if d > 0 else float("nan")
+        half = float(stats.t.ppf(1 - alpha / 2, d) * se) if d > 0 else float("nan")
+        t_plain = beta[j] / se_plain if se_plain > 0 else float("nan")
+        coefs[name] = {
+            "coef": float(beta[j]), "std_err": se, "t": float(t), "df": float(d), "p": p_val,
+            "ci": [float(beta[j] - half), float(beta[j] + half)],
+            "stratum": "whole plot" if between[j] else "within plot",
+            "df_satterthwaite": _satterthwaite_df(l_vec, kr) if kr else None,
+            "containment": {
+                "std_err": se_plain, "df": int(d_cont),
+                "p": float(2 * stats.t.sf(abs(t_plain), d_cont)) if d_cont > 0 else float("nan"),
+            },
+        }
+
+    terms = []
+    info = _design_info(fit)
+    for term_name, slc in info.term_name_slices.items():
+        if term_name == "Intercept":
+            continue
+        idx = np.arange(k_fe)[slc]
+        q = idx.size
+        b = beta[idx]
+        f_plain = float(b @ np.linalg.solve(phi[np.ix_(idx, idx)], b) / q)
+        is_between = bool(between[idx].all())
+        d_cont = containment(is_between)
+        p_cont = float(stats.f.sf(f_plain, q, d_cont)) if d_cont > 0 else float("nan")
+        l_mat = np.zeros((q, k_fe))
+        l_mat[np.arange(q), idx] = 1.0
+        test = _kr_test(l_mat, beta, kr) if kr else None
+        if test is not None:
+            f_stat, d = test["F"], test["den_df"]
+            p_val = float(stats.f.sf(f_stat, q, d))
+        else:
+            f_stat, d, p_val = f_plain, float(d_cont), p_cont
+        terms.append({
+            "term": term_name, "num_df": int(q), "den_df": float(d), "F": float(f_stat), "p": p_val,
+            "stratum": "whole plot" if is_between else "within plot",
+            "significant": bool(p_val < alpha) if d > 0 else False,
+            "kr_scale": test["scale"] if test is not None else None,
+            "containment": {"F": f_plain, "den_df": int(d_cont), "p": p_cont},
+        })
+
+    df_method = "Kenward-Roger" if kr else "containment"
+    notes = []
+    if kr is None:
+        notes.append(
+            "Kenward-Roger could not be computed for this fit, so tests use containment degrees of freedom."
+        )
+    if boundary:
+        notes.append(
+            "The between-group variance was estimated at zero, so the fixed effects are close to an OLS fit. "
+            "The tests still allow for the uncertainty in that estimate: whole-plot terms keep roughly the "
+            "whole-plot degrees of freedom, which is the safe reading for a split-plot design."
+        )
+    if df_wp <= 0:
+        notes.append("No whole-plot degrees of freedom are left by the containment rule, so whole-plot terms are "
+                     "barely testable; read their Kenward-Roger tests with care.")
+    if not fit.converged:
+        notes.append("The REML fit did not fully converge; treat the variance components with caution.")
+
+    sizes = df.groupby(groups).size()
+    return {
+        "analysis": "mixed_model",
+        "formula": formula,
+        "groups": groups,
+        "method": f"REML, random intercept per group, {df_method} degrees of freedom",
+        "df_method": df_method,
+        "n": int(exog.shape[0]),
+        "n_groups": int(sizes.size),
+        "group_size_min": int(sizes.min()),
+        "group_size_max": int(sizes.max()),
+        "balanced": bool(sizes.min() == sizes.max()),
+        "alpha": alpha,
+        "coefficients": coefs,
+        "terms": terms,
+        "df_whole_plot": int(df_wp),
+        "df_within_plot": int(df_sp),
+        "variance_components": {
+            "group": var_group,
+            "residual": var_resid,
+            "ratio_group_to_residual": var_group / var_resid if var_resid > 0 else float("nan"),
+            "intraclass_correlation": var_group / (var_group + var_resid) if var_group + var_resid > 0 else 0.0,
+            "group_sd": float(np.sqrt(var_group)),
+            "residual_sd": float(np.sqrt(var_resid)),
+        },
+        "reml_log_likelihood": float(fit.llf),
+        "converged": bool(fit.converged),
+        "variance_at_boundary": bool(boundary),
+        "notes": notes,
+        "conclusion": (
+            f"Significant at alpha={alpha:g} ({df_method} tests): "
+            + (", ".join(t["term"] for t in terms if t["significant"]) or "none")
+            + f". Containment df for comparison: whole-plot {df_wp}, within-plot {df_sp}."
+        ),
+    }
+
+
+def _kenward_roger(x: np.ndarray, labels: np.ndarray, var_group: float, var_resid: float) -> dict[str, Any]:
+    """Kenward & Roger (1997) ingredients for a random-intercept model.
+
+    ``V = var_group * Z Z' + var_resid * I``, linear in the two variance
+    parameters, so their second derivatives (KR's R_ij) vanish. Returns the
+    plug-in covariance of the fixed effects ``phi = (X'V^-1X)^-1``, the
+    small-sample-adjusted ``phi_a = phi + 2 phi U phi`` (which allows for the
+    variance parameters being estimated), the ``P_i`` matrices, and ``W``, the
+    asymptotic covariance of the REML variance estimates.
+    """
+    if var_resid <= 0:
+        raise ValueError("residual variance must be positive")
+    n = x.shape[0]
+    _, idx = np.unique(labels, return_inverse=True)
+    z = np.zeros((n, idx.max() + 1))
+    z[np.arange(n), idx.ravel()] = 1.0
+    derivs = [z @ z.T, np.eye(n)]  # dV/d var_group, dV/d var_resid
+    v_inv = np.linalg.inv(var_group * derivs[0] + var_resid * derivs[1])
+    v_inv_x = v_inv @ x
+    phi = np.linalg.inv(x.T @ v_inv_x)
+    h = [g @ v_inv_x for g in derivs]                     # G_i V^-1 X
+    p_mats = [-(v_inv_x.T @ hi) for hi in h]              # P_i = -X'V^-1 G_i V^-1 X
+    q_mats = [[hi.T @ v_inv @ hj for hj in h] for hi in h]  # Q_ij = X'V^-1 G_i V^-1 G_j V^-1 X
+    proj = v_inv - v_inv_x @ phi @ v_inv_x.T               # REML projection
+    pg = [proj @ g for g in derivs]
+    info = np.array([[np.trace(pg[i] @ pg[j]) for j in range(2)] for i in range(2)])
+    w = 2.0 * np.linalg.inv(info)
+    u = sum(w[i, j] * (q_mats[i][j] - p_mats[i] @ phi @ p_mats[j]) for i in range(2) for j in range(2))
+    u = (u + u.T) / 2.0
+    phi_a = phi + 2.0 * phi @ u @ phi
+    return {"phi": phi, "phi_a": phi_a, "p": p_mats, "w": w}
+
+
+def _kr_test(l_mat: np.ndarray, beta: np.ndarray, kr: dict[str, Any]) -> dict[str, float] | None:
+    """Kenward-Roger F test of ``L beta = 0``: scaled F, denominator df, scale.
+
+    Follows Kenward & Roger (1997) as implemented in R's pbkrtest: Theta uses
+    the plug-in covariance, the F statistic the adjusted one. Returns None when
+    the approximation breaks down (non-finite or non-positive df), so the
+    caller can fall back to containment.
+    """
+    phi, phi_a, p_mats, w = kr["phi"], kr["phi_a"], kr["p"], kr["w"]
+    q = l_mat.shape[0]
+    theta = l_mat.T @ np.linalg.solve(l_mat @ phi @ l_mat.T, l_mat)
+    u = [theta @ phi @ pm @ phi for pm in p_mats]
+    a1 = sum(w[i, j] * np.trace(u[i]) * np.trace(u[j]) for i in range(2) for j in range(2))
+    a2 = sum(w[i, j] * np.sum(u[i] * u[j].T) for i in range(2) for j in range(2))
+    lb = l_mat @ beta
+    f_stat = float(lb @ np.linalg.solve(l_mat @ phi_a @ l_mat.T, lb) / q)
+    if a2 <= 1e-12:
+        # Variance parameters carry no uncertainty into this contrast: no small-sample correction.
+        return {"F": f_stat, "den_df": float("inf"), "scale": 1.0}
+    b = (a1 + 6.0 * a2) / (2.0 * q)
+    g = ((q + 1) * a1 - (q + 4) * a2) / ((q + 2) * a2)
+    denom = 3 * q + 2 * (1 - g)
+    c1, c2, c3 = g / denom, (q - g) / denom, (q + 2 - g) / denom
+    v0, v1, v2 = 1 + c1 * b, 1 - c2 * b, 1 - c3 * b
+    if abs(v2) < 1e-12:
+        # rho -> infinity: the exact answer is m = 4 (e.g. a balanced
+        # whole-plot test on 4 df), where pbkrtest also applies no scaling.
+        return {"F": f_stat, "den_df": 4.0, "scale": 1.0}
+    if abs(v1) < 1e-12:
+        return None
+    rho = (1.0 / q) * ((1 - a2 / q) / v1) ** 2 * v0 / v2
+    # q*rho - 1 may be negative: that is how the approximation reaches
+    # denominator df below 4 (for a single contrast m = 2/A exactly, the
+    # Satterthwaite df), so it is not an error. Only m <= 0 is.
+    if abs(q * rho - 1) < 1e-12:
+        return {"F": f_stat * (1 - a2 / q), "den_df": float("inf"), "scale": float(1 - a2 / q)}
+    m = 4.0 + (q + 2) / (q * rho - 1)
+    if not np.isfinite(m) or m <= 0:
+        return None
+    scale = 1.0 if abs(m - 4.0) < 1e-2 else m * (1 - a2 / q) / (m - 2)
+    return {"F": f_stat * scale, "den_df": float(m), "scale": float(scale)}
+
+
+def _satterthwaite_df(l_vec: np.ndarray, kr: dict[str, Any]) -> float | None:
+    """Satterthwaite df for the single contrast ``l'beta``: 2 v^2 / (grad' W grad)."""
+    phi, p_mats, w = kr["phi"], kr["p"], kr["w"]
+    var = float(l_vec @ phi @ l_vec)
+    grad = np.array([-(l_vec @ phi @ pm @ phi @ l_vec) for pm in p_mats])
+    denom = float(grad @ w @ grad)
+    if denom <= 1e-300:
+        return None
+    return float(2.0 * var**2 / denom)
 
 
 def _count_coefs(model, alpha: float, skip: tuple[str, ...] = ()) -> dict[str, Any]:

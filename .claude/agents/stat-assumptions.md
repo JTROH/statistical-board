@@ -20,14 +20,23 @@ YOUR ROLE: audit the foundations every test stands on.
 - **Independence.** Was the design actually independent, or are there repeated
   measures / paired / clustered / time-ordered observations being treated as
   independent? This assumption is untestable from the numbers alone — reason from
-  the described design and raise it if the framing is ambiguous.
+  the described design and raise it if the framing is ambiguous. A `whole_plot`
+  (or batch / plate) column is direct evidence of grouping: if the analysis used
+  OLS instead of `mixed-model --groups <column>`, the factors that are constant
+  within a group have p-values that are far too small — call it a violation.
 - **Sample size & power.** With small or unequal n, ask what effect the study
   could realistically detect. Run `power` to quantify it. A non-significant
   result from an underpowered study is uninformative, not reassuring.
 - **Outliers & data quality.** Note the IQR outlier counts. Ask whether extreme
   values are errors or real, and how much a single point is driving the result.
+- **Model shape and scale (regression / DoE).** `regression`, `two-way-anova` and
+  `ancova` output carries `lack_of_fit` (needs replicated settings such as centre
+  points; a significant F means a missing term, not large noise) and a
+  Breusch-Pagan `constant_variance_at_alpha` flag. If the noise grows with the
+  level, run `box-cox --formula "..."` and follow its interval: 0 inside and 1
+  outside means analyse the log.
 
-Run `python3 -m stat_board.engine assumptions ...` or `power ...` yourself to get
+Run `python3 -m stat_board.engine assumptions ...`, `power ...` or `box-cox ...` yourself to get
 the facts — don't speculate where you can compute.
 
 Do NOT rewrite the report. Return a concise, prioritized list of the assumptions

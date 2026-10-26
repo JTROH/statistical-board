@@ -38,3 +38,11 @@ def reg_csv() -> Path:
 @pytest.fixture
 def multifactor_csv() -> Path:
     return SAMPLE_DATA / "multifactor.csv"
+
+
+@pytest.fixture
+def doe_dataset_csv() -> Path:
+    """A 4-factor bioreactor DoE: run_order, run_type, paired *_coded/natural
+    columns, and a titre response. The canonical example of the shape
+    `doe_advisor.export.run_sheet_csv` writes and `stat_board` analyses."""
+    return SAMPLE_DATA / "DOE_sample_dataset.csv"
