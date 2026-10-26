@@ -977,6 +977,287 @@ def stationary_point(path: str, formula: str, factors: list[str], *, alpha: floa
     }
 
 
+def _containment_df(exog: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, int, int]:
+    """(whole-plot flag per column, whole-plot df, within-plot df) by the containment rule.
+
+    A column constant within every group (the intercept, a hard-to-change
+    factor) is estimated from group totals, so it is tested on
+    g - p_between degrees of freedom; any other column on n - g - p_within.
+    """
+    groups = np.unique(labels)
+    between = np.ones(exog.shape[1], dtype=bool)
+    for g in groups:
+        rows = exog[labels == g]
+        if rows.shape[0] > 1:
+            between &= np.ptp(rows, axis=0) <= 1e-9 * np.maximum(1.0, np.abs(rows).max(axis=0))
+    n_between = int(between.sum())
+    return between, groups.size - n_between, exog.shape[0] - groups.size - (exog.shape[1] - n_between)
+
+
+def mixed_model(path: str, formula: str, groups: str, *, alpha: float = 0.05) -> dict[str, Any]:
+    """Linear mixed model with a random intercept per group — the analysis a
+    split-plot (or any grouped) experiment needs.
+
+    Runs that share a whole plot (one incubator temperature, one media batch,
+    one plate) share a random offset, so they are not independent. Analysing
+    them by OLS treats the hard-to-change factors as if they had been reset
+    every run, and their p-values come out far too small. Here the fit is REML
+    and every fixed effect is tested on the right degrees of freedom by the
+    containment rule: a term constant within every group (a whole-plot term)
+    against the number of groups, everything else against the runs within
+    groups. Each term also gets a Wald F test on all of its columns.
+
+    ``groups`` is the column naming the whole plot (``whole_plot`` on a
+    split-plot run sheet).
+    """
+    import warnings
+
+    import statsmodels.formula.api as smf
+
+    from .data import load_dataframe
+
+    df = load_dataframe(path)
+    if groups not in df.columns:
+        raise ValueError(f"no column called {groups!r} to group runs by")
+    df = df.dropna(subset=[groups])
+    model = smf.mixedlm(formula, df, groups=df[groups])
+    fit = None
+    messages: list[str] = []
+    # L-BFGS with tight stopping rules: statsmodels' defaults stop about 1e-5
+    # short of the REML optimum, and Kenward-Roger's df and scaling inherit that
+    # error. These agree with lme4 to ~1e-9 (validation/validate_kr.R).
+    tight = {"lbfgs": {"pgtol": 1e-12, "factr": 10.0}}
+    for method in ("lbfgs", "powell", "nm"):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                candidate = model.fit(reml=True, method=method, **tight.get(method, {}))
+            except (np.linalg.LinAlgError, ValueError) as exc:
+                messages.append(f"{method}: {exc}")
+                continue
+        if fit is None or candidate.llf > fit.llf:
+            fit = candidate
+            messages = [str(w.message) for w in caught if "converge" in str(w.message).lower()]
+        if candidate.converged:
+            break
+    if fit is None:
+        raise ValueError("the mixed model could not be fitted: " + "; ".join(messages))
+
+    k_fe = model.k_fe
+    names = list(model.exog_names[:k_fe])
+    exog = np.asarray(model.exog, float)
+    labels = np.asarray(df[groups])
+    between, df_wp, df_sp = _containment_df(exog, labels)
+    beta = np.asarray(fit.fe_params, float)
+    var_resid = float(fit.scale)
+    var_group = max(float(np.asarray(fit.cov_re)[0, 0]), 0.0)
+    boundary = var_group <= 1e-8 * max(var_resid, 1e-300)
+
+    try:
+        kr = _kenward_roger(exog, labels, var_group, var_resid)
+    except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+        kr = None
+    phi = kr["phi"] if kr else np.asarray(fit.cov_params(), float)[:k_fe, :k_fe]
+
+    def containment(is_between: bool) -> int:
+        return df_wp if is_between else df_sp
+
+    coefs = {}
+    for j, name in enumerate(names):
+        l_vec = np.zeros(k_fe)
+        l_vec[j] = 1.0
+        d_cont = containment(bool(between[j]))
+        se_plain = float(np.sqrt(phi[j, j]))
+        test = _kr_test(l_vec[None, :], beta, kr) if kr else None
+        if test is not None:
+            se, d = float(np.sqrt(kr["phi_a"][j, j])), test["den_df"]
+        else:
+            se, d = se_plain, float(d_cont)
+        t = beta[j] / se if se > 0 else float("nan")
+        p_val = float(2 * stats.t.sf(abs(t), d)) if d > 0 else float("nan")
+        half = float(stats.t.ppf(1 - alpha / 2, d) * se) if d > 0 else float("nan")
+        t_plain = beta[j] / se_plain if se_plain > 0 else float("nan")
+        coefs[name] = {
+            "coef": float(beta[j]), "std_err": se, "t": float(t), "df": float(d), "p": p_val,
+            "ci": [float(beta[j] - half), float(beta[j] + half)],
+            "stratum": "whole plot" if between[j] else "within plot",
+            "df_satterthwaite": _satterthwaite_df(l_vec, kr) if kr else None,
+            "containment": {
+                "std_err": se_plain, "df": int(d_cont),
+                "p": float(2 * stats.t.sf(abs(t_plain), d_cont)) if d_cont > 0 else float("nan"),
+            },
+        }
+
+    terms = []
+    info = _design_info(fit)
+    for term_name, slc in info.term_name_slices.items():
+        if term_name == "Intercept":
+            continue
+        idx = np.arange(k_fe)[slc]
+        q = idx.size
+        b = beta[idx]
+        f_plain = float(b @ np.linalg.solve(phi[np.ix_(idx, idx)], b) / q)
+        is_between = bool(between[idx].all())
+        d_cont = containment(is_between)
+        p_cont = float(stats.f.sf(f_plain, q, d_cont)) if d_cont > 0 else float("nan")
+        l_mat = np.zeros((q, k_fe))
+        l_mat[np.arange(q), idx] = 1.0
+        test = _kr_test(l_mat, beta, kr) if kr else None
+        if test is not None:
+            f_stat, d = test["F"], test["den_df"]
+            p_val = float(stats.f.sf(f_stat, q, d))
+        else:
+            f_stat, d, p_val = f_plain, float(d_cont), p_cont
+        terms.append({
+            "term": term_name, "num_df": int(q), "den_df": float(d), "F": float(f_stat), "p": p_val,
+            "stratum": "whole plot" if is_between else "within plot",
+            "significant": bool(p_val < alpha) if d > 0 else False,
+            "kr_scale": test["scale"] if test is not None else None,
+            "containment": {"F": f_plain, "den_df": int(d_cont), "p": p_cont},
+        })
+
+    df_method = "Kenward-Roger" if kr else "containment"
+    notes = []
+    if kr is None:
+        notes.append(
+            "Kenward-Roger could not be computed for this fit, so tests use containment degrees of freedom."
+        )
+    if boundary:
+        notes.append(
+            "The between-group variance was estimated at zero, so the fixed effects are close to an OLS fit. "
+            "The tests still allow for the uncertainty in that estimate: whole-plot terms keep roughly the "
+            "whole-plot degrees of freedom, which is the safe reading for a split-plot design."
+        )
+    if df_wp <= 0:
+        notes.append("No whole-plot degrees of freedom are left by the containment rule, so whole-plot terms are "
+                     "barely testable; read their Kenward-Roger tests with care.")
+    if not fit.converged:
+        notes.append("The REML fit did not fully converge; treat the variance components with caution.")
+
+    sizes = df.groupby(groups).size()
+    return {
+        "analysis": "mixed_model",
+        "formula": formula,
+        "groups": groups,
+        "method": f"REML, random intercept per group, {df_method} degrees of freedom",
+        "df_method": df_method,
+        "n": int(exog.shape[0]),
+        "n_groups": int(sizes.size),
+        "group_size_min": int(sizes.min()),
+        "group_size_max": int(sizes.max()),
+        "balanced": bool(sizes.min() == sizes.max()),
+        "alpha": alpha,
+        "coefficients": coefs,
+        "terms": terms,
+        "df_whole_plot": int(df_wp),
+        "df_within_plot": int(df_sp),
+        "variance_components": {
+            "group": var_group,
+            "residual": var_resid,
+            "ratio_group_to_residual": var_group / var_resid if var_resid > 0 else float("nan"),
+            "intraclass_correlation": var_group / (var_group + var_resid) if var_group + var_resid > 0 else 0.0,
+            "group_sd": float(np.sqrt(var_group)),
+            "residual_sd": float(np.sqrt(var_resid)),
+        },
+        "reml_log_likelihood": float(fit.llf),
+        "converged": bool(fit.converged),
+        "variance_at_boundary": bool(boundary),
+        "notes": notes,
+        "conclusion": (
+            f"Significant at alpha={alpha:g} ({df_method} tests): "
+            + (", ".join(t["term"] for t in terms if t["significant"]) or "none")
+            + f". Containment df for comparison: whole-plot {df_wp}, within-plot {df_sp}."
+        ),
+    }
+
+
+def _kenward_roger(x: np.ndarray, labels: np.ndarray, var_group: float, var_resid: float) -> dict[str, Any]:
+    """Kenward & Roger (1997) ingredients for a random-intercept model.
+
+    ``V = var_group * Z Z' + var_resid * I``, linear in the two variance
+    parameters, so their second derivatives (KR's R_ij) vanish. Returns the
+    plug-in covariance of the fixed effects ``phi = (X'V^-1X)^-1``, the
+    small-sample-adjusted ``phi_a = phi + 2 phi U phi`` (which allows for the
+    variance parameters being estimated), the ``P_i`` matrices, and ``W``, the
+    asymptotic covariance of the REML variance estimates.
+    """
+    if var_resid <= 0:
+        raise ValueError("residual variance must be positive")
+    n = x.shape[0]
+    _, idx = np.unique(labels, return_inverse=True)
+    z = np.zeros((n, idx.max() + 1))
+    z[np.arange(n), idx.ravel()] = 1.0
+    derivs = [z @ z.T, np.eye(n)]  # dV/d var_group, dV/d var_resid
+    v_inv = np.linalg.inv(var_group * derivs[0] + var_resid * derivs[1])
+    v_inv_x = v_inv @ x
+    phi = np.linalg.inv(x.T @ v_inv_x)
+    h = [g @ v_inv_x for g in derivs]                     # G_i V^-1 X
+    p_mats = [-(v_inv_x.T @ hi) for hi in h]              # P_i = -X'V^-1 G_i V^-1 X
+    q_mats = [[hi.T @ v_inv @ hj for hj in h] for hi in h]  # Q_ij = X'V^-1 G_i V^-1 G_j V^-1 X
+    proj = v_inv - v_inv_x @ phi @ v_inv_x.T               # REML projection
+    pg = [proj @ g for g in derivs]
+    info = np.array([[np.trace(pg[i] @ pg[j]) for j in range(2)] for i in range(2)])
+    w = 2.0 * np.linalg.inv(info)
+    u = sum(w[i, j] * (q_mats[i][j] - p_mats[i] @ phi @ p_mats[j]) for i in range(2) for j in range(2))
+    u = (u + u.T) / 2.0
+    phi_a = phi + 2.0 * phi @ u @ phi
+    return {"phi": phi, "phi_a": phi_a, "p": p_mats, "w": w}
+
+
+def _kr_test(l_mat: np.ndarray, beta: np.ndarray, kr: dict[str, Any]) -> dict[str, float] | None:
+    """Kenward-Roger F test of ``L beta = 0``: scaled F, denominator df, scale.
+
+    Follows Kenward & Roger (1997) as implemented in R's pbkrtest: Theta uses
+    the plug-in covariance, the F statistic the adjusted one. Returns None when
+    the approximation breaks down (non-finite or non-positive df), so the
+    caller can fall back to containment.
+    """
+    phi, phi_a, p_mats, w = kr["phi"], kr["phi_a"], kr["p"], kr["w"]
+    q = l_mat.shape[0]
+    theta = l_mat.T @ np.linalg.solve(l_mat @ phi @ l_mat.T, l_mat)
+    u = [theta @ phi @ pm @ phi for pm in p_mats]
+    a1 = sum(w[i, j] * np.trace(u[i]) * np.trace(u[j]) for i in range(2) for j in range(2))
+    a2 = sum(w[i, j] * np.sum(u[i] * u[j].T) for i in range(2) for j in range(2))
+    lb = l_mat @ beta
+    f_stat = float(lb @ np.linalg.solve(l_mat @ phi_a @ l_mat.T, lb) / q)
+    if a2 <= 1e-12:
+        # Variance parameters carry no uncertainty into this contrast: no small-sample correction.
+        return {"F": f_stat, "den_df": float("inf"), "scale": 1.0}
+    b = (a1 + 6.0 * a2) / (2.0 * q)
+    g = ((q + 1) * a1 - (q + 4) * a2) / ((q + 2) * a2)
+    denom = 3 * q + 2 * (1 - g)
+    c1, c2, c3 = g / denom, (q - g) / denom, (q + 2 - g) / denom
+    v0, v1, v2 = 1 + c1 * b, 1 - c2 * b, 1 - c3 * b
+    if abs(v2) < 1e-12:
+        # rho -> infinity: the exact answer is m = 4 (e.g. a balanced
+        # whole-plot test on 4 df), where pbkrtest also applies no scaling.
+        return {"F": f_stat, "den_df": 4.0, "scale": 1.0}
+    if abs(v1) < 1e-12:
+        return None
+    rho = (1.0 / q) * ((1 - a2 / q) / v1) ** 2 * v0 / v2
+    # q*rho - 1 may be negative: that is how the approximation reaches
+    # denominator df below 4 (for a single contrast m = 2/A exactly, the
+    # Satterthwaite df), so it is not an error. Only m <= 0 is.
+    if abs(q * rho - 1) < 1e-12:
+        return {"F": f_stat * (1 - a2 / q), "den_df": float("inf"), "scale": float(1 - a2 / q)}
+    m = 4.0 + (q + 2) / (q * rho - 1)
+    if not np.isfinite(m) or m <= 0:
+        return None
+    scale = 1.0 if abs(m - 4.0) < 1e-2 else m * (1 - a2 / q) / (m - 2)
+    return {"F": f_stat * scale, "den_df": float(m), "scale": float(scale)}
+
+
+def _satterthwaite_df(l_vec: np.ndarray, kr: dict[str, Any]) -> float | None:
+    """Satterthwaite df for the single contrast ``l'beta``: 2 v^2 / (grad' W grad)."""
+    phi, p_mats, w = kr["phi"], kr["p"], kr["w"]
+    var = float(l_vec @ phi @ l_vec)
+    grad = np.array([-(l_vec @ phi @ pm @ phi @ l_vec) for pm in p_mats])
+    denom = float(grad @ w @ grad)
+    if denom <= 1e-300:
+        return None
+    return float(2.0 * var**2 / denom)
+
+
 def _count_coefs(model, alpha: float, skip: tuple[str, ...] = ()) -> dict[str, Any]:
     """Coefficient table for a count model, reported as incidence-rate ratios
     (IRR = exp(coef): the multiplicative change in the event rate per unit)."""

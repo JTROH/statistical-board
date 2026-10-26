@@ -136,6 +136,19 @@ def _question_section(spec: DesignSpec) -> str:
         f"Runs expected to be lost: **{spec.expected_run_losses}**.",
         "",
     ]
+    if spec.is_split_plot:
+        hard = ", ".join(f"**{f.name}**" for f in spec.factors if f.hard_to_change)
+        plots = f"**{spec.n_whole_plots}**" if spec.n_whole_plots else "proposed by the tool"
+        lines += [
+            f"Hard to change: {hard}. These are set once per *whole plot* and the other factors vary among "
+            f"the runs inside it, so every option below is a **split-plot** design. Whole plots: {plots}. "
+            f"Whole-plot variance assumed **{spec.wp_variance_ratio:g}×** the run-to-run variance. The "
+            "hard-to-change factors are tested against the whole plots, not the runs, so they get far fewer "
+            "degrees of freedom and less power than the others — the price of not resetting them every run.",
+            "",
+        ]
+        if spec.n_center_points:
+            lines += ["Centre points are not added to split-plot designs; the search places every run.", ""]
     return "\n".join(lines)
 
 
@@ -315,6 +328,11 @@ def _option_detail(option: ScoredDesign, narrative) -> str:
         f" ({props.n_coefficients} coefficients)" if props.n_coefficients not in (0, props.n_model_terms) else ""
     )
     facts.append(f"{props.n_model_terms} model terms{coefficients}, {props.residual_df} residual df")
+    if option.design.whole_plots is not None:
+        facts.append(
+            f"{option.design.n_whole_plots} whole plots; hard-to-change terms tested on "
+            f"{props.power.whole_plot_df} df, the rest on {props.power.subplot_df} df"
+        )
     facts.append(f"D-efficiency {props.d_efficiency:.3f}, G-efficiency {props.prediction.g_efficiency:.0%}")
     lines += [f"<small>{'; '.join(facts)}.</small>", ""]
     return "\n".join(lines)
@@ -338,11 +356,25 @@ def _run_sheet(option: ScoredDesign, spec: DesignSpec, seed: int = 0) -> str:
     design = option.design
     order = design.randomised_order(seed=seed)
     blocked = design.blocks is not None
+    split = design.whole_plots is not None
+    plot_number: dict[int, int] = {}
+    if split:
+        for run in order:
+            plot_number.setdefault(int(design.whole_plots[run]), len(plot_number) + 1)
+    group = "Block | " if blocked else ("Whole plot | " if split else "")
     names = " | ".join(f"{f.name}{f' ({f.units})' if f.units else ''}" for f in spec.factors)
-    header = f"| Run | {'Block | ' if blocked else ''}{names} |"
-    divider = "|---" * (spec.n_factors + 1 + blocked) + "|"
+    header = f"| Run | {group}{names} |"
+    divider = "|---" * (spec.n_factors + 1 + bool(group)) + "|"
+
+    def group_cell(run: int) -> str:
+        if blocked:
+            return f"{int(design.blocks[run]) + 1} | "
+        if split:
+            return f"{plot_number[int(design.whole_plots[run])]} | "
+        return ""
+
     rows = [
-        f"| {position + 1} | {f'{int(design.blocks[run]) + 1} | ' if blocked else ''}"
+        f"| {position + 1} | {group_cell(run)}"
         + " | ".join(f.setting(design.matrix[run, j]) for j, f in enumerate(spec.factors)) + " |"
         for position, run in enumerate(order)
     ]
@@ -356,6 +388,14 @@ def _run_sheet(option: ScoredDesign, spec: DesignSpec, seed: int = 0) -> str:
                 f" Run the {design.n_blocks} blocks one after another, each as one day or batch; the order "
                 "is randomised within each block. Record the block number with the result."
                 if blocked
+                else ""
+            )
+            + (
+                f" This is a split-plot design: set the hard-to-change factors once for each of the "
+                f"{design.n_whole_plots} whole plots, run that whole plot's runs in the order shown, then move "
+                "on. The whole plots are in random order, and so are the runs inside each. Record the whole "
+                "plot number with the result: the analysis needs it."
+                if split
                 else ""
             ),
             "",

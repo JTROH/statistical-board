@@ -11,7 +11,8 @@ It is not optional polish. It is the adoption strategy.
 
 ```bash
 python3 -m validation.run_tool     # this tool's answers  -> results/tool.json
-Rscript validation/validate_r.R    # R's answers          -> results/r.json
+Rscript validation/validate_r.R    # R's design answers   -> results/r.json
+Rscript validation/validate_kr.R   # R's mixed-model / Kenward-Roger answers -> results/r_kr.json
 python3 -m validation.compare      # compare; non-zero exit on any disagreement
 ```
 
@@ -27,6 +28,7 @@ skips the R leg automatically when R is not installed.
 | Central composite | R, `rsm::ccd` | run count, factorial/axial point counts, alpha |
 | Definitive screening | published properties | 2m+1 runs, three levels, main effects orthogonal to every 2FI |
 | Power | `scipy` directly, in `tests/designs/test_properties.py` | non-central *t* against a closed form |
+| Mixed model (split-plot analysis) | R, `lme4` + `pbkrtest` | REML variance components, coefficients, plug-in and Kenward–Roger-adjusted SEs, and each term's KR F, denominator df, F scaling and p |
 
 The **word-length pattern** is the strict test for fractional factorials. It
 counts defining words of length 3, 4, 5, 6, 7, and it is a design's aliasing
@@ -42,6 +44,21 @@ R with `FrF2`, `rsm` and `jsonlite`:
 install.packages(c("FrF2", "rsm", "jsonlite"))
 ```
 
+The Kenward–Roger leg needs only `lme4`, `pbkrtest` and `jsonlite`, and runs (and
+is skipped) independently of the design leg:
+
+```r
+install.packages(c("lme4", "pbkrtest", "jsonlite"))
+```
+
+Its six cases are frozen CSVs in `datasets/kr_*.csv`, read identically by both
+sides (`kr_datasets.py` records how they were made). They stress different parts
+of the method: a balanced split-plot, lost runs, unequal whole plots with a
+continuous subplot factor, a three-level categorical whole-plot factor, almost no
+whole-plot variance (a boundary fit), and a design made by this tool's own
+split-plot search. R tests each term with `KRmodcomp` and an explicit restriction
+matrix on that term's columns, the same hypothesis the tool tests.
+
 Without R the suite still runs and still checks the definitive screening designs
 against their published properties; it just reports the R legs as skipped.
 
@@ -53,8 +70,15 @@ JMP has no scriptable interface here, so that leg is manual. See
 
 ## Current status
 
-As of the last run: **all 112 automated checks agree** with R 4.5.3
-(`FrF2` 2.3.4, `rsm` 2.10.6). The JMP leg has not yet been run.
+As of the last run of the design leg: **all 112 automated checks agree** with R
+4.5.3 (`FrF2` 2.3.4, `rsm` 2.10.6). The JMP leg has not yet been run.
+
+Kenward–Roger leg, 2026-10-25: **all 205 checks agree** with R 4.3.1 (`lme4`
+1.1.35.5, `pbkrtest` 0.5.3) at a relative tolerance of 1e-6. Largest differences:
+F 3e-8, denominator df 2e-10, F scaling 2e-13, p 8e-8 (relative). The tolerance
+is set by the two REML optimisers, not by the method; with statsmodels' default
+L-BFGS stopping rule the gap was ~1e-4, which is why `mixed_model` now fits with
+tight `pgtol`/`factr`.
 
 ## Two findings worth remembering
 

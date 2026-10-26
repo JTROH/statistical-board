@@ -30,6 +30,7 @@ function factorRow(factor = {}) {
     <td><input class="f-high num" type="number" step="any"></td>
     <td class="f-levels-cell" colspan="2" hidden><input class="f-levels" placeholder="levels, e.g. media A, media B, media C"></td>
     <td><input class="f-units" placeholder="optional"></td>
+    <td class="center"><input type="checkbox" class="f-htc" title="Hard to change: set once per whole plot"></td>
     <td><button type="button" class="link" title="Remove this factor">&times;</button></td>`;
   const categorical = factor.type === "categorical" || (Array.isArray(factor.levels) && factor.levels.length > 0);
   tr.querySelector(".f-name").value = factor.name ?? "";
@@ -38,6 +39,8 @@ function factorRow(factor = {}) {
   tr.querySelector(".f-high").value = categorical ? "" : factor.high ?? "";
   tr.querySelector(".f-levels").value = Array.isArray(factor.levels) ? factor.levels.join(", ") : factor.levels ?? "";
   tr.querySelector(".f-units").value = factor.units ?? "";
+  tr.querySelector(".f-htc").checked = Boolean(factor.hard_to_change);
+  tr.querySelector(".f-htc").onchange = syncSplitPlot;
   const syncType = () => {
     const isCat = tr.querySelector(".f-type").value === "categorical";
     tr.querySelector(".f-low").parentElement.hidden = isCat;
@@ -46,8 +49,17 @@ function factorRow(factor = {}) {
   };
   tr.querySelector(".f-type").onchange = syncType;
   syncType();
-  tr.querySelector("button").onclick = () => tr.remove();
+  tr.querySelector("button").onclick = () => {
+    tr.remove();
+    syncSplitPlot();
+  };
   return tr;
+}
+
+/* The whole-plot settings only mean something once a factor is hard to change. */
+function syncSplitPlot() {
+  const split = [...document.querySelectorAll("#factors .f-htc")].some((c) => c.checked);
+  document.querySelectorAll(".split-only").forEach((el) => (el.hidden = !split));
 }
 
 function responseRow(response = {}) {
@@ -113,12 +125,14 @@ function readForm() {
           type: "categorical",
           levels: tr.querySelector(".f-levels").value.split(",").map((v) => v.trim()).filter(Boolean),
           units: tr.querySelector(".f-units").value.trim(),
+          hard_to_change: tr.querySelector(".f-htc").checked,
         }
       : {
           name: tr.querySelector(".f-name").value.trim(),
           low: numOrNull(tr.querySelector(".f-low").value),
           high: numOrNull(tr.querySelector(".f-high").value),
           units: tr.querySelector(".f-units").value.trim(),
+          hard_to_change: tr.querySelector(".f-htc").checked,
         }
   );
   const responses = [...$("responses").querySelectorAll("tbody tr")].map((tr) => ({
@@ -148,6 +162,8 @@ function readForm() {
     hard_ranges: $("hard-ranges").checked,
     n_blocks: numOrNull($("blocks").value),
     constraints_text: $("constraints").value,
+    n_whole_plots: numOrNull($("whole-plots").value),
+    wp_variance_ratio: numOrNull($("wp-ratio").value),
     title: named.length
       ? `Design options: ${named.map((f) => f.name).join(", ")}`
       : "Experimental design memo",
@@ -172,6 +188,9 @@ function writeForm(form) {
   $("hard-ranges").checked = Boolean(form.hard_ranges);
   if (form.n_blocks != null) $("blocks").value = form.n_blocks;
   $("constraints").value = constraintLines(form);
+  $("whole-plots").value = form.n_whole_plots ?? "";
+  $("wp-ratio").value = form.wp_variance_ratio ?? 1;
+  syncSplitPlot();
   updateModelNote();
   updateEffectNote();
 }
@@ -326,13 +345,19 @@ function prosAndCons(option, cheapest, dearest, basis) {
   if (option.exceeds_declared_range) {
     cons.push("Some runs sit outside the ranges you declared — check they are physically runnable.");
   }
+  if (option.n_whole_plots) {
+    pros.push(`Split-plot: the hard-to-change factors are set only ${option.n_whole_plots} times, once per whole plot.`);
+    if (option.whole_plot_df != null && option.whole_plot_df <= 3) {
+      cons.push(`Only ${option.whole_plot_df} degrees of freedom to test the hard-to-change factors — more whole plots is the remedy.`);
+    }
+  }
   if (option.detail.criterion) {
     const aim = option.detail.criterion === "I" ? "the most precise predictions (I-optimal)" : "the most precise effect estimates (D-optimal)";
     pros.push(`Custom design: searched for exactly ${option.n_runs} runs, aiming at ${aim}, within your factor types and constraints.`);
   }
   const hasContinuous = (state.lastForm?.factors || []).some((f) => f.type !== "categorical" && f.name);
   const quadratic = state.lastForm?.model_order === "quadratic";
-  if (option.n_center_points === 0 && hasContinuous && !quadratic) {
+  if (option.n_center_points === 0 && hasContinuous && !quadratic && !option.n_whole_plots) {
     cons.push("No centre points, so it cannot tell you whether the response is curved.");
   }
   if (option.residual_df <= 2) cons.push(`Only ${option.residual_df} degrees of freedom for error — wide error bars.`);
@@ -396,7 +421,7 @@ function renderDetails(options, basis) {
       <h3>${roleTag(option.roles)}${option.name}</h3>
       <p class="meta">
         ${option.n_runs} runs (${option.n_center_points} centre points) &middot;
-        ${option.n_model_terms} model terms${option.n_coefficients && option.n_coefficients !== option.n_model_terms ? ` (${option.n_coefficients} coefficients)` : ""} &middot; ${option.residual_df} residual df &middot;
+        ${option.n_model_terms} model terms${option.n_coefficients && option.n_coefficients !== option.n_model_terms ? ` (${option.n_coefficients} coefficients)` : ""} &middot; ${option.n_whole_plots ? `${option.n_whole_plots} whole plots (${option.whole_plot_df} / ${option.subplot_df} df) &middot; ` : ""}${option.residual_df} residual df &middot;
         D&#8209;efficiency ${num(option.d_efficiency, 3)} &middot; G&#8209;efficiency ${pct(option.g_efficiency)}
       </p>
       <div class="pros-cons">

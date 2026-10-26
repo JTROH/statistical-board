@@ -218,3 +218,4 @@ table.grid td input.r-target-value { width: 90px; margin-top: 4px; }
 .explainer dt { font-weight: 600; margin-top: 8px; }
 .explainer dd { margin: 2px 0 0; color: var(--muted); }
 #effect-note strong { color: var(--ink); }
+table.grid td.center { text-align: center; }

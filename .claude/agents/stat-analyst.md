@@ -70,6 +70,16 @@ one-off script for what these already compute deterministically):
   tested range).
 - **Blocked run sheets.** If the data has a `block` column, add `+ C(block)` to
   every formula. It removes day/batch shifts; do not report it as an effect.
+- **Split-plot run sheets.** If the data has a `whole_plot` column (or the runs
+  are otherwise grouped: batches, plates, incubator runs), the primary fit is
+  `mixed-model --formula "..." --groups whole_plot` — REML with a random
+  intercept per group, each term tested with Kenward–Roger F tests (small-
+  sample corrected; the containment-df tests are alongside). Report the KR term
+  F tests with their denominator df, and the variance components; quote the
+  containment tests too when they disagree.
+  An OLS `regression` on such data treats the hard-to-change factors as if they
+  were reset every run and overstates the evidence for them; use OLS only for
+  the diagnostics below, and say so.
 - `stationary-point --formula "..." --factor F1 --factor F2` — for a quadratic
   model: whether the surface has a maximum, minimum or saddle, where (with
   CIs), and whether that point is inside the tested region. Run it whenever the

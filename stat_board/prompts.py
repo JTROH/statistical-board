@@ -61,6 +61,11 @@ Work the plan the judge gave you:
    day-to-day shifts, never reported as a finding.
    For a quadratic model also run `stationary-point` (max/min/saddle, its location
    with CIs, and whether it is inside the tested region).
+   If the data has a `whole_plot` column (a split-plot run sheet) or the runs are
+   otherwise grouped (batches, plates), the primary fit is `mixed-model` with that
+   column as `groups`: REML, random intercept per group, Kenward-Roger F tests
+   (containment-df tests alongside). OLS regression on grouped runs overstates the evidence for the
+   factors held constant within a group; use it only for the diagnostics below.
    ALSO run, for every multi-factor/DoE model: `predict` (per-row leverage/Cook's
    D — flags which runs are influential enough to warrant a confirmation rerun),
    `vif` (collinearity/confounding between terms), and `design-coverage` (how much
@@ -112,7 +117,9 @@ YOUR ROLE: ASSUMPTIONS SKEPTIC.
   t-test / classic ANOVA is invalid; require the Welch version.
 - Independence: is the design actually independent, or repeated/paired/clustered
   being treated as independent? Untestable from numbers — reason from the design
-  and raise it if the framing is ambiguous.
+  and raise it if the framing is ambiguous. A `whole_plot` / batch / plate column
+  analysed by OLS instead of `mixed-model` is a violation: factors constant within
+  a group get p-values that are far too small.
 - Sample size & power: with small/unequal n, what effect could realistically be
   detected? A non-significant result from an underpowered study is uninformative,
   not reassuring.
@@ -167,7 +174,7 @@ YOUR ROLE: VERIFIER.
 4. Derived claims (percent changes, corrected p-values) must reproduce.
 5. For a MULTI-FACTOR/DoE analysis, also independently re-run `predict`, `vif`,
    `stationary-point` (quadratic models only),
-   `design-coverage`, and `doe-optimum`, and confirm every "Recommended Next
+   `design-coverage`, and `doe-optimum` (and `mixed-model` for a split-plot), and confirm every "Recommended Next
    Experiments" claim traces to one of those four outputs — a recommendation
    with no matching diagnostic is unsupported, same as an unreproduced p-value.
 

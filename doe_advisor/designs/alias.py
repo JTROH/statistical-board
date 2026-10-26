@@ -26,7 +26,17 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .model import Term, is_estimable, model_matrix, model_terms, potential_terms, term_label, term_slices
+from .model import (
+    Term,
+    cross_information,
+    information,
+    is_estimable,
+    model_matrix,
+    model_terms,
+    potential_terms,
+    term_label,
+    term_slices,
+)
 from .spec import Design, ModelOrder
 
 # Below this, an alias coefficient is numerical dust rather than a real concern.
@@ -154,12 +164,15 @@ def alias_report(
     factor_names: list[str] | None = None,
     terms: list[Term] | None = None,
     extra_potential: list[Term] | None = None,
+    eta: float = 1.0,
 ) -> AliasReport:
     """Compute the alias structure of ``design`` under the given model order.
 
     ``terms`` overrides the fitted terms (when constraints made some of them
     inestimable); ``extra_potential`` adds terms to check as aliases — the
     ones that were dropped, which still bias the fit if they are active.
+    For a split-plot design (``design.whole_plots``) the alias matrix is the
+    GLS one, ``(X1'V^-1 X1)^-1 X1'V^-1 X2``, with whole-plot variance ratio ``eta``.
     """
     names = factor_names or design.factor_names
     levels = design.levels
@@ -174,7 +187,12 @@ def alias_report(
     # bias it, but they can absorb a potential term — reported separately.
     x1 = model_matrix(design.matrix, fitted, design.blocks, levels)
     x2 = model_matrix(design.matrix, potential, levels=levels) if potential else np.zeros((design.n_runs, 0))
-    a = np.linalg.solve(x1.T @ x1, x1.T @ x2) if potential else np.zeros((x1.shape[1], 0))
+    wp = design.whole_plots
+    a = (
+        np.linalg.solve(information(x1, wp, eta), cross_information(x1, x2, wp, eta))
+        if potential
+        else np.zeros((x1.shape[1], 0))
+    )
     fitted_cols = term_slices(fitted, levels)
     potential_cols = term_slices(potential, levels)
     n_model_cols = fitted_cols[-1].stop if fitted_cols else 0

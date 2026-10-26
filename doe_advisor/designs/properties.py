@@ -26,11 +26,13 @@ from .alias import AliasReport, alias_report
 from .model import (
     Levels,
     effect_codes,
+    information,
     is_estimable,
     model_matrix,
     model_terms,
     n_columns,
     residual_df,
+    stratum_df,
     term_label,
     term_slices,
 )
@@ -54,28 +56,43 @@ MAX_LOSS_SCENARIOS = 400
 # --------------------------------------------------------------------------
 
 
-def d_efficiency(matrix: np.ndarray, terms: list, blocks: np.ndarray | None = None, levels: Levels = None) -> float:
+def d_efficiency(
+    matrix: np.ndarray,
+    terms: list,
+    blocks: np.ndarray | None = None,
+    levels: Levels = None,
+    whole_plots: np.ndarray | None = None,
+    eta: float = 1.0,
+) -> float:
     """det(X'X / n)^(1/p). Higher is better. Measures how precisely the
     *coefficients* are estimated — the classic criterion, and the wrong one to
-    optimise if your endgame is predicting across a range."""
+    optimise if your endgame is predicting across a range. For a split-plot
+    design, X' V^-1 X replaces X'X (see ``model.information``)."""
     x = model_matrix(matrix, terms, blocks, levels)
     n, p = x.shape
     # errstate: some numpy builds (Accelerate on macOS) emit spurious divide/
     # overflow warnings from slogdet on matrices wider than 32 while returning
     # the right answer; a genuinely singular matrix still comes back sign <= 0.
     with np.errstate(all="ignore"):
-        sign, logdet = np.linalg.slogdet(x.T @ x / n)
+        sign, logdet = np.linalg.slogdet(information(x, whole_plots, eta) / n)
     if sign <= 0:
         return 0.0
     return float(np.exp(logdet / p))
 
 
-def a_efficiency(matrix: np.ndarray, terms: list, blocks: np.ndarray | None = None, levels: Levels = None) -> float:
+def a_efficiency(
+    matrix: np.ndarray,
+    terms: list,
+    blocks: np.ndarray | None = None,
+    levels: Levels = None,
+    whole_plots: np.ndarray | None = None,
+    eta: float = 1.0,
+) -> float:
     """p / trace(n (X'X)^-1). Higher is better. Average coefficient variance."""
     x = model_matrix(matrix, terms, blocks, levels)
     n, p = x.shape
     try:
-        inv = np.linalg.inv(x.T @ x)
+        inv = np.linalg.inv(information(x, whole_plots, eta))
     except np.linalg.LinAlgError:
         return 0.0
     tr = float(np.trace(inv) * n)
@@ -83,7 +100,13 @@ def a_efficiency(matrix: np.ndarray, terms: list, blocks: np.ndarray | None = No
 
 
 def scaled_prediction_variance(
-    matrix: np.ndarray, terms: list, points: np.ndarray, blocks: np.ndarray | None = None, levels: Levels = None
+    matrix: np.ndarray,
+    terms: list,
+    points: np.ndarray,
+    blocks: np.ndarray | None = None,
+    levels: Levels = None,
+    whole_plots: np.ndarray | None = None,
+    eta: float = 1.0,
 ) -> np.ndarray:
     """SPV(x) = n * x_m' (X'X)^-1 x_m at each point.
 
@@ -94,7 +117,7 @@ def scaled_prediction_variance(
     x = model_matrix(matrix, terms, blocks, levels)
     n = x.shape[0]
     try:
-        inv = np.linalg.inv(x.T @ x)
+        inv = np.linalg.inv(information(x, whole_plots, eta))
     except np.linalg.LinAlgError:
         return np.full(points.shape[0], np.inf)
     xm = model_matrix(points, terms, levels=levels)
@@ -324,6 +347,10 @@ class PowerReport:
     # scientists are least sure of, and this is what it costs to be wrong.
     min_power_if_noise_high: float | None = None
     noise_stress_factor: float = DEFAULT_NOISE_STRESS
+    # Split-plot only: degrees of freedom of the two error strata. Whole-plot
+    # terms are tested on ``whole_plot_df``, everything else on ``subplot_df``.
+    whole_plot_df: int | None = None
+    subplot_df: int | None = None
 
     @staticmethod
     def _min(values: dict[str, float]) -> float | None:
@@ -421,6 +448,17 @@ def power_curve(spec: DesignSpec, up_to: int, target: float = 0.80) -> PowerCurv
     return curve
 
 
+def _term_dfs(
+    x: np.ndarray, terms: list, df: int, whole_plots: np.ndarray | None, levels: Levels
+) -> tuple[list[int], int | None, int | None]:
+    """Test df for every non-intercept term, plus the two stratum dfs (split-plot only)."""
+    model_terms_only = [t for t in terms if t]
+    if whole_plots is None:
+        return [df] * len(model_terms_only), None, None
+    df_wp, df_sp, flags = stratum_df(x, terms, whole_plots, levels)
+    return [df_wp if f else df_sp for t, f in zip(terms, flags, strict=True) if t], df_wp, df_sp
+
+
 def _min_term_power(
     matrix: np.ndarray,
     terms: list,
@@ -428,6 +466,8 @@ def _min_term_power(
     alpha: float,
     blocks: np.ndarray | None = None,
     levels: Levels = None,
+    whole_plots: np.ndarray | None = None,
+    eta: float = 1.0,
 ) -> float | None:
     """Weakest-term power, without the rest of :func:`power_report`.
 
@@ -438,11 +478,16 @@ def _min_term_power(
     if df <= 0:
         return None
     x = model_matrix(matrix, terms, blocks, levels)
-    inv = np.linalg.inv(x.T @ x)
-    # Power rises with the non-centrality parameter, so the weakest term is the
-    # one with the smallest — one t-distribution call instead of one per term.
-    ncp = min(std_effect / se for _, se in _term_ses(inv, terms, levels))
-    return _power_for_ncp(ncp, df, alpha)
+    inv = np.linalg.inv(information(x, whole_plots, eta))
+    dfs, df_wp, df_sp = _term_dfs(x, terms, df, whole_plots, levels)
+    if whole_plots is not None and min(df_wp, df_sp) <= 0:
+        return None
+    # Power rises with the non-centrality parameter, so within each df the
+    # weakest term is the one with the smallest — one t call per distinct df.
+    weakest: dict[int, float] = {}
+    for (_, se), d in zip(_term_ses(inv, terms, levels), dfs, strict=True):
+        weakest[d] = min(weakest.get(d, np.inf), std_effect / se)
+    return min(_power_for_ncp(ncp, d, alpha) for d, ncp in weakest.items())
 
 
 def power_report(design: Design, spec: DesignSpec) -> PowerReport:
@@ -463,17 +508,21 @@ def power_report(design: Design, spec: DesignSpec) -> PowerReport:
         return report
 
     x = model_matrix(design.matrix, terms, design.blocks, levels)
-    inv = np.linalg.inv(x.T @ x)
+    inv = np.linalg.inv(information(x, design.whole_plots, spec.wp_variance_ratio))
+    dfs, report.whole_plot_df, report.subplot_df = _term_dfs(x, terms, df, design.whole_plots, levels)
+    if design.whole_plots is not None and min(report.whole_plot_df, report.subplot_df) <= 0:
+        report.saturated = True
+        return report
 
     std_effect = response.standardised_effect if response else None
     report.standardised_effect = std_effect
 
     # Effect detectable at 80% power on the weakest term. Reported in standard
     # deviations, so it stays meaningful even when the scientist has not yet
-    # committed to a target effect size.
+    # committed to a target effect size. (A split-plot design has two test df.)
     model = _term_ses(inv, terms, levels)
-    ncp_80 = _solve_ncp_for_power(0.80, df, spec.alpha)
-    report.detectable_effect_sd = float(max(ncp_80 * se for _, se in model))
+    ncp_80 = {d: _solve_ncp_for_power(0.80, d, spec.alpha) for d in set(dfs)}
+    report.detectable_effect_sd = float(max(ncp_80[d] * se for (_, se), d in zip(model, dfs, strict=True)))
     if response is not None and response.noise_sd:
         report.detectable_effect_units = report.detectable_effect_sd * abs(response.noise_sd)
 
@@ -484,11 +533,11 @@ def power_report(design: Design, spec: DesignSpec) -> PowerReport:
             "curvature": report.curvature_terms,
         }
         pessimistic: list[float] = []
-        for term, se in model:
+        for (term, se), d in zip(model, dfs, strict=True):
             ncp = std_effect / se
             label = term_label(term, spec.factor_names)
-            buckets[term_kind(term)][label] = _power_for_ncp(ncp, df, spec.alpha)
-            pessimistic.append(_power_for_ncp(ncp / report.noise_stress_factor, df, spec.alpha))
+            buckets[term_kind(term)][label] = _power_for_ncp(ncp, d, spec.alpha)
+            pessimistic.append(_power_for_ncp(ncp / report.noise_stress_factor, d, spec.alpha))
         report.min_power_if_noise_high = min(pessimistic)
 
     return report
@@ -607,8 +656,9 @@ def prediction_report(design: Design, spec: DesignSpec, seed: int = 0) -> Predic
     # of the feasible region are not sampled exactly, so G-efficiency is then
     # approximate.)
     uniform, extreme = region_samples(spec, seed=seed)
-    spv = scaled_prediction_variance(design.matrix, terms, uniform, design.blocks, levels)
-    spv_extreme = scaled_prediction_variance(design.matrix, terms, extreme, design.blocks, levels)
+    wp, eta = design.whole_plots, spec.wp_variance_ratio
+    spv = scaled_prediction_variance(design.matrix, terms, uniform, design.blocks, levels, wp, eta)
+    spv_extreme = scaled_prediction_variance(design.matrix, terms, extreme, design.blocks, levels, wp, eta)
     spv_sorted = np.sort(spv)
     p = n_columns(terms, levels)
     max_spv = float(max(np.max(spv_extreme), np.max(spv)))
@@ -675,7 +725,8 @@ def robustness_report(design: Design, spec: DesignSpec, seed: int = 0) -> Robust
     if r == 0 or not is_estimable(design.matrix, terms, blocks=blocks, levels=levels):
         return RobustnessReport(n_losses=r, n_scenarios=0, fraction_estimable=0.0, applicable=False)
 
-    base_d = d_efficiency(design.matrix, terms, blocks, levels)
+    wp, eta = design.whole_plots, spec.wp_variance_ratio
+    base_d = d_efficiency(design.matrix, terms, blocks, levels, wp, eta)
     response = spec.primary_response
     std_effect = response.standardised_effect if response else None
     n = design.n_runs
@@ -703,12 +754,13 @@ def robustness_report(design: Design, spec: DesignSpec, seed: int = 0) -> Robust
         keep = np.setdiff1d(all_idx, lost)
         kept = design.matrix[keep]
         kept_blocks = None if blocks is None else _relabel(blocks[keep])
+        kept_wp = None if wp is None else _relabel(wp[keep])
         if is_estimable(kept, terms, blocks=kept_blocks, levels=levels):
             n_ok += 1
             if base_d > 0:
-                worst_ratio = min(worst_ratio, d_efficiency(kept, terms, kept_blocks, levels) / base_d)
+                worst_ratio = min(worst_ratio, d_efficiency(kept, terms, kept_blocks, levels, kept_wp, eta) / base_d)
             if std_effect is not None:
-                power = _min_term_power(kept, terms, std_effect, spec.alpha, kept_blocks, levels)
+                power = _min_term_power(kept, terms, std_effect, spec.alpha, kept_blocks, levels, kept_wp, eta)
                 if power is not None:
                     powers.append(power)
         else:
@@ -758,19 +810,25 @@ def evaluate(design: Design, spec: DesignSpec, seed: int = 0) -> DesignPropertie
     terms = list(fitted_model(spec).terms)
     estimable = is_estimable(design.matrix, terms, blocks=design.blocks, levels=levels)
     feasible = spec.feasible(design.matrix) if spec.is_constrained else np.ones(design.n_runs, dtype=bool)
+    wp, eta = design.whole_plots, spec.wp_variance_ratio
     return DesignProperties(
         design=design,
         estimable=estimable,
         n_runs=design.n_runs,
         n_model_terms=len(terms),
         residual_df=residual_df(design.matrix, terms, design.blocks, levels),
-        d_efficiency=d_efficiency(design.matrix, terms, design.blocks, levels) if estimable else 0.0,
-        a_efficiency=a_efficiency(design.matrix, terms, design.blocks, levels) if estimable else 0.0,
+        d_efficiency=d_efficiency(design.matrix, terms, design.blocks, levels, wp, eta) if estimable else 0.0,
+        a_efficiency=a_efficiency(design.matrix, terms, design.blocks, levels, wp, eta) if estimable else 0.0,
         power=power_report(design, spec),
         prediction=prediction_report(design, spec, seed=seed),
         robustness=robustness_report(design, spec, seed=seed),
         aliasing=alias_report(
-            design, spec.model_order, spec.factor_names, terms=terms, extra_potential=list(fitted_model(spec).dropped)
+            design,
+            spec.model_order,
+            spec.factor_names,
+            terms=terms,
+            extra_potential=list(fitted_model(spec).dropped),
+            eta=eta,
         ),
         n_infeasible_runs=int((~feasible).sum()),
         n_coefficients=n_columns(terms, levels),

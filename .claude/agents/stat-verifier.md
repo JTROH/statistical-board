@@ -25,7 +25,8 @@ YOUR ROLE: independently reproduce and adjudicate every quantitative claim.
    corrected p-values must reproduce.
 5. **DoE/multi-factor recommendations.** For a multi-factor/DoE analysis, also
    independently re-run `predict`, `vif`, `design-coverage`, `doe-optimum`, and
-   (for a quadratic model) `stationary-point`.
+   (for a quadratic model) `stationary-point`. For a split-plot (a `whole_plot`
+   column), re-run `mixed-model` and check each term's Kenward–Roger F, df and p.
    A "Recommended Next Experiments" claim with no matching diagnostic behind it
    is unsupported, exactly like an unreproduced p-value.
 

@@ -23,7 +23,7 @@ _GROUP_COMMANDS = {
 _STANDALONE = {"regression", "two-way-anova", "ancova", "poisson", "negbin",
                "chisquare", "power", "correct",
                "predict", "vif", "box-cox", "design-coverage", "doe-optimum",
-               "stationary-point", "bayes-regression"}
+               "stationary-point", "bayes-regression", "mixed-model"}
 
 TOOL_NAME = "run_stat"
 
@@ -62,7 +62,11 @@ def build_tool() -> dict[str, Any]:
             "max/min/saddle, its location with CIs, and whether it lies inside the tested "
             "region — the untested-optimum counterpart to doe-optimum. bayes-regression "
             "(formula) gives a JZS Bayes factor per model term (full model vs without "
-            "that term), matching R's BayesFactor — the Bayesian reading of a regression/DoE fit."
+            "that term), matching R's BayesFactor — the Bayesian reading of a regression/DoE fit. "
+            "mixed-model (formula + groups) is the analysis for a SPLIT-PLOT or otherwise grouped "
+            "experiment (a whole_plot column, batches, plates): REML with a random intercept per group and "
+            "Kenward-Roger small-sample F tests per term (containment tests alongside) — never analyse a split-plot run sheet by OLS "
+            "regression, which overstates the evidence for the hard-to-change factors."
         ),
         "input_schema": {
             "type": "object",
@@ -82,6 +86,7 @@ def build_tool() -> dict[str, Any]:
                 "r": {"type": "number", "description": "bayes-ttest: Cauchy prior scale (default 0.707)."},
                 "formula": {"type": "string", "description": "regression/predict/vif/box-cox/doe-optimum: "
                                                             "patsy formula, e.g. 'y ~ x1 + x2 + C(g)'."},
+                "groups": {"type": "string", "description": "mixed-model: column naming the whole plot / group."},
                 "value": {"type": "string", "description": "two-way-anova/ancova/design-coverage/"
                                                            "doe-optimum: numeric outcome column."},
                 "factors": {"type": "array", "items": {"type": "string"},
@@ -185,6 +190,8 @@ def make_executor(
                 res = analyses.bayes_regression(data_path, inp["formula"])
             elif cmd == "stationary-point":
                 res = analyses.stationary_point(data_path, inp["formula"], inp["factors"], alpha=a)
+            elif cmd == "mixed-model":
+                res = analyses.mixed_model(data_path, inp["formula"], inp["groups"], alpha=a)
             elif cmd == "doe-optimum":
                 res = analyses.doe_optimum(data_path, inp["formula"], inp["factors"], inp["value"])
             else:

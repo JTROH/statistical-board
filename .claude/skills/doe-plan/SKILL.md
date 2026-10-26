@@ -1,6 +1,6 @@
 ---
 name: doe-plan
-description: Interactive design-of-experiments consultant — helps the user decide which experimental design fits their study, runs the shared design engine to generate and score real candidates, has a design critic attack the front-runner, and writes a run sheet CSV ready to analyse afterwards. Use when the user invokes /doe-plan, is planning an experiment, asks how many runs they need, wants a factorial/CCD/Box-Behnken or custom (optimal) design, has categorical factors or constrained settings, or wants to design the follow-up to an analysis they already ran. For analysing results that already exist, use /stat-board or /stat-advisor instead.
+description: Interactive design-of-experiments consultant — helps the user decide which experimental design fits their study, runs the shared design engine to generate and score real candidates, has a design critic attack the front-runner, and writes a run sheet CSV ready to analyse afterwards. Use when the user invokes /doe-plan, is planning an experiment, asks how many runs they need, wants a factorial/CCD/Box-Behnken or custom (optimal) design, has categorical, constrained or hard-to-change factors (split-plot), or wants to design the follow-up to an analysis they already ran. For analysing results that already exist, use /stat-board or /stat-advisor instead.
 ---
 
 # DoE Planner — choose the experiment before you run it
@@ -25,6 +25,9 @@ Arguments, all optional:
      supplier — is **categorical**: ask for its levels.
    - Are there settings that **cannot be run** — a combined limit on two feeds, a
      resin that cannot take a buffer? Those are constraints (see the spec below).
+   - Is any factor **hard to change** between runs — an incubator or reactor-bank
+     temperature, a media batch, a plate-level setting? Then the design is a
+     split-plot (see below); ask how many times it can realistically be reset.
    - What do you **measure**, and what do you want to do with it — find out which
      factors matter (*screen*), push it up or down (*maximize*/*minimize*), or hit a
      number (*target*)?
@@ -164,6 +167,16 @@ weighted sum of continuous factors in natural units, a `never` line rules out a
 combination of categorical levels. (Structured forms are also accepted:
 `"constraints": [{"coefficients": {"feed": 1, "bolus": 1}, "op": "<=", "bound": 8}]`,
 `"disallowed": [{"media": ["CD-C"], "cell line": ["clone 2"]}]`.)
+
+**Split-plot designs.** Mark a factor `"hard_to_change": true`; optionally give
+`"n_whole_plots"` (how many times it is set) and `"wp_variance_ratio"` (whole-plot
+variance / run variance, default 1). Every option is then a split-plot design: the
+hard-to-change factors are set once per whole plot, and they are tested on the
+*whole-plot* degrees of freedom — say plainly that their power is much lower, and
+that more whole plots (not more runs per plot) is what raises it. The run sheet has
+a `whole_plot` column; the analysis must be `python3 -m stat_board.engine
+mixed-model --groups whole_plot` (the analysis hint gives the full command), never
+an OLS regression.
 
 **Custom designs.** With a categorical factor or a constraint the classical
 families cannot serve, so the engine searches for a **custom (optimal) design** by

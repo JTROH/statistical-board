@@ -53,3 +53,21 @@ POWER_CASES: list[tuple[str, int, int, str, float]] = [
 # BCDE, ADE -> [3, 3, 4]). Minimum aberration means the same pattern, not
 # necessarily the same words.
 BLOCKING_CASES: list[tuple[int, int]] = [(3, 2), (4, 2), (5, 2), (5, 4), (6, 2), (6, 4)]
+
+# Kenward-Roger tests in the mixed-model (split-plot) analysis: (dataset in
+# validation/datasets, patsy formula for the tool, lme4 fixed-effects formula
+# for R, grouping column, terms to test as (tool term name, R term label)).
+# R tests each term with pbkrtest::KRmodcomp and an explicit restriction
+# matrix on that term's columns — the same hypothesis the tool tests. The
+# datasets are frozen CSVs; see validation/kr_datasets.py for how they were made.
+KR_CASES: list[tuple[str, str, str, str, list[tuple[str, str]]]] = [
+    ("kr_balanced.csv", "y ~ A * B", "y ~ A * B", "whole_plot", [("A", "A"), ("B", "B"), ("A:B", "A:B")]),
+    ("kr_lost_runs.csv", "y ~ A * B", "y ~ A * B", "whole_plot", [("A", "A"), ("B", "B"), ("A:B", "A:B")]),
+    ("kr_unequal.csv", "y ~ A * B", "y ~ A * B", "whole_plot", [("A", "A"), ("B", "B"), ("A:B", "A:B")]),
+    ("kr_categorical.csv", "y ~ C(media) + B", "y ~ media + B", "whole_plot",
+     [("C(media)", "media"), ("B", "B")]),
+    ("kr_low_wp_variance.csv", "y ~ A * B", "y ~ A * B", "whole_plot", [("A", "A"), ("B", "B"), ("A:B", "A:B")]),
+    ("kr_tool_design.csv", "y ~ (temp + pH + feed)**2", "y ~ (temp + pH + feed)^2", "whole_plot",
+     [("temp", "temp"), ("pH", "pH"), ("feed", "feed"), ("temp:pH", "temp:pH"), ("temp:feed", "temp:feed"),
+      ("pH:feed", "pH:feed")]),
+]

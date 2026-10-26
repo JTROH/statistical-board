@@ -112,7 +112,11 @@ def option_facts(option: ScoredDesign, spec: DesignSpec, cheapest: int, dearest:
         "is_cheapest": props.n_runs == cheapest,
         "is_dearest": props.n_runs == dearest,
         "three_level": bool(detail.get("three_level", False)),
-        "custom": option.design.family == "custom",
+        "custom": option.design.family in ("custom", "split_plot"),
+        "split_plot": option.design.whole_plots is not None,
+        "whole_plots": option.design.n_whole_plots,
+        "whole_plot_df": props.power.whole_plot_df,
+        "subplot_df": props.power.subplot_df,
         "criterion": detail.get("criterion"),
         "n_starts": detail.get("n_starts"),
         "has_continuous": any(not f.is_categorical for f in spec.factors),
@@ -300,10 +304,23 @@ class TemplateNarrator:
                 f"your budget, factor types and constraints instead of a textbook size."
             )
 
+        if f["split_plot"]:
+            pros.append(
+                f"The hard-to-change factors are set only {f['whole_plots']} times, once per whole plot, "
+                f"instead of before every run."
+            )
+            if f["whole_plot_df"] is not None and f["whole_plot_df"] <= 3:
+                cons.append(
+                    f"Only {f['whole_plot_df']} degrees of freedom to test the hard-to-change factors, so their "
+                    f"effects must be large to be seen; more whole plots is the remedy, not more runs per plot."
+                )
+
         # Centre points are not scored on any of the four axes, so their value
         # would otherwise be invisible — and their absence is easy to miss in a
         # design that scores well precisely because it spent nothing on them.
-        if f["centre_points"] >= 2 and not f["three_level"] and not f["fits_curvature"]:
+        if f["split_plot"]:
+            pass  # centre points are not part of split-plot designs here; the memo says so once
+        elif f["centre_points"] >= 2 and not f["three_level"] and not f["fits_curvature"]:
             cons.append(
                 f"Its {f['centre_points']} centre points cost runs that add no power, but they are what "
                 f"lets you check whether the response is curved before you commit to a straight-line model."
@@ -423,7 +440,15 @@ def _caveats(spec: DesignSpec, options: list[ScoredDesign]) -> list[str]:
                 else ""
             )
         )
-    custom = [o for o in options if o.design.family == "custom"]
+    if spec.is_split_plot:
+        notes.append(
+            "These are split-plot designs. Analyse the results as a mixed model with the whole plot as a "
+            "random effect (the run sheet's analysis hint gives the command); an ordinary regression would "
+            "treat the hard-to-change factors as if they had been reset every run and overstate the "
+            "evidence for them. Power assumes the whole-plot variance ratio you gave; if resetting those "
+            "factors is noisier than that, their power is lower than shown."
+        )
+    custom = [o for o in options if o.design.family in ("custom", "split_plot")]
     if custom:
         notes.append(
             "Custom designs come from a coordinate-exchange search (the method behind JMP's Custom Design). "

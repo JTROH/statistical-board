@@ -276,3 +276,89 @@ def residual_df(
     factor costs one per level beyond the first.
     """
     return int(matrix.shape[0] - n_params(terms, blocks, levels))
+
+
+# --------------------------------------------------------------------------
+# Split-plot: correlated errors within whole plots
+# --------------------------------------------------------------------------
+#
+# In a split-plot design the runs of one whole plot share a random whole-plot
+# effect, so Var(y) = sigma^2 * V with V = I + eta * Z Z', where Z maps runs to
+# whole plots and eta = sigma_wp^2 / sigma^2. Every precision-based number
+# (D, I, prediction variance, power, aliasing) must then use the generalised
+# least-squares information X' V^-1 X instead of X'X. V is block diagonal, and
+# for a whole plot of m runs its inverse is I - c J with c = eta / (1 + m eta),
+# so X' V^-1 X = X'X - sum over whole plots of c * s s', s the plot's column sums.
+
+
+def _plot_weights(whole_plots: np.ndarray, eta: float) -> tuple[np.ndarray, np.ndarray]:
+    """(label per run as 0..g-1, c per whole plot)."""
+    _, labels, sizes = np.unique(np.asarray(whole_plots), return_inverse=True, return_counts=True)
+    return labels.ravel(), eta / (1.0 + sizes * eta)
+
+
+def _plot_sums(x: np.ndarray, labels: np.ndarray, n_plots: int) -> np.ndarray:
+    sums = np.zeros((n_plots, x.shape[1]))
+    np.add.at(sums, labels, x)
+    return sums
+
+
+def information(x: np.ndarray, whole_plots: np.ndarray | None = None, eta: float = 1.0) -> np.ndarray:
+    """X' V^-1 X (in units of 1/sigma^2); plain X'X when there are no whole plots."""
+    xtx = x.T @ x
+    if whole_plots is None or eta == 0:
+        return xtx
+    labels, c = _plot_weights(whole_plots, eta)
+    sums = _plot_sums(x, labels, c.size)
+    return xtx - (sums * c[:, None]).T @ sums
+
+
+def cross_information(
+    x1: np.ndarray, x2: np.ndarray, whole_plots: np.ndarray | None = None, eta: float = 1.0
+) -> np.ndarray:
+    """X1' V^-1 X2, for the GLS alias matrix."""
+    cross = x1.T @ x2
+    if whole_plots is None or eta == 0:
+        return cross
+    labels, c = _plot_weights(whole_plots, eta)
+    s1, s2 = _plot_sums(x1, labels, c.size), _plot_sums(x2, labels, c.size)
+    return cross - (s1 * c[:, None]).T @ s2
+
+
+def whole_plot_term_flags(
+    x: np.ndarray, terms: list[Term], whole_plots: np.ndarray, levels: Levels = None
+) -> list[bool]:
+    """Per term: is it a whole-plot term (constant within every whole plot)?
+
+    Read off the design itself rather than from which factors were marked hard
+    to change, so it stays right for a design with runs lost.
+    """
+    labels, _ = _plot_weights(whole_plots, 0.0)
+    flags = []
+    for slc in term_slices(terms, levels):
+        cols = x[:, slc]
+        constant = True
+        for g in range(int(labels.max()) + 1):
+            block = cols[labels == g]
+            if block.shape[0] > 1 and np.ptp(block, axis=0).max() > 1e-9:
+                constant = False
+                break
+        flags.append(constant)
+    return flags
+
+
+def stratum_df(
+    x: np.ndarray, terms: list[Term], whole_plots: np.ndarray, levels: Levels = None
+) -> tuple[int, int, list[bool]]:
+    """(whole-plot df, subplot df, whole-plot flag per term) — the containment rule.
+
+    Whole-plot terms (the intercept, hard-to-change factors and their
+    interactions) are estimated from whole-plot totals, so they are tested on
+    g - p_wp degrees of freedom; every other term on n - g - p_sp.
+    """
+    flags = whole_plot_term_flags(x, terms, whole_plots, levels)
+    widths = [term_width(t, levels) for t in terms]
+    g = int(np.unique(whole_plots).size)
+    p_wp = sum(w for w, f in zip(widths, flags, strict=True) if f)
+    p_sp = sum(w for w, f in zip(widths, flags, strict=True) if not f)
+    return g - p_wp, x.shape[0] - g - p_sp, flags

@@ -51,6 +51,11 @@ class Factor:
     ``("media A", "media B", "media C")``) for a categorical factor; ``low`` and
     ``high`` are then ignored and kept at 0 and k-1 so the level index decodes
     to itself.
+
+    ``hard_to_change`` marks a factor that cannot be reset between every run —
+    an incubator temperature, a media batch, a plate-level setting. It is set
+    once per *whole plot* and the easy-to-change factors vary within it, which
+    makes the design a split-plot.
     """
 
     name: str
@@ -58,6 +63,7 @@ class Factor:
     high: float = 1.0
     units: str = ""
     levels: tuple[str, ...] = ()
+    hard_to_change: bool = False
 
     def __post_init__(self) -> None:
         if self.levels:
@@ -284,6 +290,13 @@ class DesignSpec:
     # generator only ever proposes runs that satisfy them.
     constraints: list[LinearConstraint] = field(default_factory=list)
     disallowed: list[DisallowedCombination] = field(default_factory=list)
+    # Split-plot settings, used only when a factor is hard to change. The
+    # number of whole plots is how many times the hard-to-change factors are
+    # set (None: the tool proposes some). The variance ratio is the
+    # whole-plot-to-run variance, sigma_wp^2 / sigma^2 — JMP's default of 1
+    # says resetting the hard-to-change factors adds as much noise as a run.
+    n_whole_plots: int | None = None
+    wp_variance_ratio: float = 1.0
 
     def __post_init__(self) -> None:
         if len(self.factors) < 2:
@@ -291,6 +304,18 @@ class DesignSpec:
         names = [f.name for f in self.factors]
         if len(set(names)) != len(names):
             raise ValueError(f"duplicate factor names: {names}")
+        if self.is_split_plot:
+            if all(f.hard_to_change for f in self.factors):
+                raise ValueError(
+                    "every factor is hard to change, so every run is its own whole plot; "
+                    "mark at least one factor as easy to change"
+                )
+            if self.n_blocks > 1:
+                raise ValueError("a split-plot design already groups its runs; use whole plots instead of blocks")
+            if self.wp_variance_ratio < 0:
+                raise ValueError("the whole-plot variance ratio cannot be negative")
+            if self.n_whole_plots is not None and self.n_whole_plots < 2:
+                raise ValueError("a split-plot design needs at least 2 whole plots")
         by_name = {f.name: f for f in self.factors}
         for constraint in self.constraints:
             for name in constraint.coefficients:
@@ -337,6 +362,15 @@ class DesignSpec:
     @property
     def is_constrained(self) -> bool:
         return bool(self.constraints or self.disallowed)
+
+    @property
+    def is_split_plot(self) -> bool:
+        return any(f.hard_to_change for f in self.factors)
+
+    @property
+    def whole_plot_factors(self) -> list[int]:
+        """Indices of the hard-to-change factors."""
+        return [j for j, f in enumerate(self.factors) if f.hard_to_change]
 
     @property
     def primary_response(self) -> Response | None:
@@ -388,6 +422,10 @@ class Design:
     # Per factor: number of levels if categorical, 0 if continuous. None means
     # every factor is continuous, which is what every classical generator builds.
     levels: tuple[int, ...] | None = None
+    # Whole-plot label (0..g-1) per run for a split-plot design, else None. The
+    # runs of one whole plot share their hard-to-change settings and are run
+    # together; their errors are correlated through the whole-plot effect.
+    whole_plots: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.matrix = np.asarray(self.matrix, dtype=float)
@@ -399,6 +437,12 @@ class Design:
                 raise ValueError(f"design {self.name!r}: one level count per factor is required")
             if not any(self.levels):
                 self.levels = None
+        if self.whole_plots is not None:
+            self.whole_plots = np.asarray(self.whole_plots, dtype=int)
+            if self.whole_plots.shape != (self.matrix.shape[0],):
+                raise ValueError(f"design {self.name!r}: one whole-plot label per run is required")
+            if self.blocks is not None:
+                raise ValueError(f"design {self.name!r}: a split-plot design cannot also be blocked")
         if self.blocks is not None:
             self.blocks = np.asarray(self.blocks, dtype=int)
             if self.blocks.shape != (self.matrix.shape[0],):
@@ -456,14 +500,23 @@ class Design:
     def n_blocks(self) -> int:
         return 1 if self.blocks is None else int(self.blocks.max()) + 1
 
+    @property
+    def n_whole_plots(self) -> int:
+        return 0 if self.whole_plots is None else int(np.unique(self.whole_plots).size)
+
     def randomised_order(self, seed: int | None = None) -> np.ndarray:
         """A run order to execute in. Randomisation is not cosmetic — it is what
         stops a drifting bioreactor or a warming incubator from masquerading as
         a factor effect.
 
         A blocked design is run block by block, randomised within each block:
-        a block is a day or a batch, so its runs must be done together."""
+        a block is a day or a batch, so its runs must be done together. A
+        split-plot design randomises the order of its whole plots, then the
+        runs within each — the restricted randomisation its analysis assumes."""
         rng = np.random.default_rng(seed)
+        if self.whole_plots is not None:
+            plots = rng.permutation(np.unique(self.whole_plots))
+            return np.concatenate([rng.permutation(np.flatnonzero(self.whole_plots == g)) for g in plots])
         if self.blocks is None:
             return rng.permutation(self.n_runs)
         return np.concatenate([rng.permutation(np.flatnonzero(self.blocks == b)) for b in range(self.n_blocks)])

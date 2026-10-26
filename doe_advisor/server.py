@@ -46,6 +46,8 @@ class FormPayload(BaseModel):
     constraints: list[dict] = []
     disallowed: list[dict] = []
     constraints_text: str = ""
+    n_whole_plots: float | None = None
+    wp_variance_ratio: float | None = None
     title: str | None = None
 
 

@@ -94,6 +94,14 @@ equivalent of JMP's Custom Design:
   design can estimate under the constraints is named and left out, not hidden.
 - **Fixed prior runs** for augmenting a study already run (`custom_design(...,
   fixed_runs=...)` in the API).
+- **Split-plot designs** for **hard-to-change factors** (an incubator or reactor-bank
+  temperature, a media batch, a plate-level setting): mark the factor
+  `"hard_to_change": true` and it is set once per *whole plot* while the other
+  factors vary inside it. Designs are built by Jones–Goos split-plot coordinate
+  exchange and scored on the GLS information `X'V⁻¹X`. Hard-to-change terms are
+  tested on whole-plot degrees of freedom, so the options table shows honestly how
+  much power they lose, and trades whole-plot count against it. The run sheet
+  randomises whole plots, then the runs inside each, and numbers them.
 
 The search is Meyer–Nachtsheim coordinate exchange with rank-one updates,
 D-optimal for screening and interaction models and I-optimal for response
@@ -176,7 +184,10 @@ One-factor commands: `describe`, `assumptions`, `ttest`, `mannwhitney`, `anova`,
 `chisquare`, `power`, `correct`. **Multi-factor** (whole table, by column name):
 `two-way-anova`, `ancova`, `regression`, plus the DoE diagnostics `predict`,
 `vif`, `design-coverage`, `doe-optimum`. **Count/rate** (events per period):
-`poisson`, `negbin`. JSON in, JSON out.
+`poisson`, `negbin`. **Grouped / split-plot** (a `whole_plot`, batch or plate column):
+`mixed-model --formula ... --groups whole_plot` — REML with a random intercept per
+group, every term tested with **Kenward–Roger** small-sample F tests (the
+containment-df tests are reported alongside). JSON in, JSON out.
 
 ```bash
 # multi-factor examples

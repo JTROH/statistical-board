@@ -25,6 +25,7 @@ from .cases import (
     CENTRAL_COMPOSITE_CASES,
     DSD_CASES,
     FRACTIONAL_CASES,
+    KR_CASES,
     POWER_CASES,
 )
 
@@ -166,6 +167,41 @@ def blocking_results() -> list[dict]:
     return out
 
 
+def kenward_roger_results() -> list[dict]:
+    """The mixed-model analysis on each frozen split-plot dataset, for pbkrtest to check."""
+    import warnings
+
+    from stat_board.engine import analyses
+
+    from .kr_datasets import DATASET_DIR
+
+    out = []
+    for dataset, formula, _r_formula, groups, terms in KR_CASES:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = analyses.mixed_model(str(DATASET_DIR / dataset), formula, groups)
+        by_term = {t["term"]: t for t in res["terms"]}
+        coefs = list(res["coefficients"].values())
+        out.append({
+            "case": dataset,
+            "df_method": res["df_method"],
+            "n": res["n"],
+            "var_group": res["variance_components"]["group"],
+            "var_resid": res["variance_components"]["residual"],
+            "coef_names": list(res["coefficients"]),
+            "coef": [c["coef"] for c in coefs],
+            "se_adjusted": [c["std_err"] for c in coefs],
+            "se_plugin": [c["containment"]["std_err"] for c in coefs],
+            "tests": [
+                {"term": r_term, "F": by_term[tool_term]["F"], "num_df": by_term[tool_term]["num_df"],
+                 "den_df": by_term[tool_term]["den_df"], "scale": by_term[tool_term]["kr_scale"],
+                 "p": by_term[tool_term]["p"]}
+                for tool_term, r_term in terms
+            ],
+        })
+    return out
+
+
 def main() -> int:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -176,6 +212,7 @@ def main() -> int:
         "dsd": dsd_results(),
         "power": power_results(),
         "blocking": blocking_results(),
+        "kenward_roger": kenward_roger_results(),
     }
     path = RESULTS_DIR / "tool.json"
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

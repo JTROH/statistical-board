@@ -22,10 +22,11 @@ import numpy as np
 
 from .designs import classical as C
 from .designs.blocking import assign_blocks
-from .designs.model import n_params
+from .designs.model import n_params, term_width
 from .designs.optimal import custom_design
 from .designs.properties import DesignProperties, evaluate, fitted_model, power_curve
 from .designs.spec import Design, DesignSpec
+from .designs.split_plot import split_plot_design
 
 # Defaults for "is this design good enough to be worth considering".
 DEFAULT_MIN_POWER = 0.80
@@ -38,6 +39,12 @@ MAX_ACCEPTABLE_ALIAS = 0.5
 CUSTOM_MIN_RESIDUAL_DF = 3
 # Above this the custom search is not run; no bioprocess study is this big.
 CUSTOM_MAX_RUNS = 200
+# Split-plot policy. The fewest whole plots offered leaves this many degrees
+# of freedom to test the hard-to-change factors against; with fewer, their
+# effects are all but untestable. The subplot stratum likewise keeps at least
+# this many. A whole plot needs at least two runs, or nothing varies inside it.
+SPLIT_PLOT_MIN_DF = 2
+MIN_RUNS_PER_WHOLE_PLOT = 2
 
 # Weights for the overall quality score. Deliberately module-level constants
 # rather than magic numbers inside a function, because they are reported to the
@@ -104,6 +111,11 @@ def generate_candidates(spec: DesignSpec) -> list[Design]:
     k = spec.n_factors
     nc = max(spec.n_center_points, 0)
     designs: list[Design] = []
+    if spec.is_split_plot:
+        # Classical designs assume every run is reset and randomised; with a
+        # hard-to-change factor the runs come in whole plots, and only the
+        # split-plot search builds and scores them that way.
+        return _finish(_split_plot_candidates(spec), spec)
     if spec.has_categorical:
         # The classical families assume every factor has a low, a centre and a
         # high. A media factor with three suppliers has none of those, so only
@@ -178,7 +190,10 @@ def custom_run_budgets(spec: DesignSpec) -> list[int]:
     levels = spec.levels
     p = n_params(list(fitted_model(spec).terms), levels=levels) + spec.n_blocks - 1
     smallest = p + CUSTOM_MIN_RESIDUAL_DF
-    only_custom = spec.has_categorical or spec.is_constrained
+    if spec.is_split_plot:
+        p_wp, p_sp = split_plot_widths(spec)
+        smallest = max(smallest, p_wp + SPLIT_PLOT_MIN_DF + p_sp + SPLIT_PLOT_MIN_DF)
+    only_custom = spec.has_categorical or spec.is_constrained or spec.is_split_plot
     budgets: set[int] = set()
     if spec.max_runs is not None:
         if spec.max_runs > p:
@@ -216,6 +231,60 @@ def _custom_candidates(spec: DesignSpec) -> list[Design]:
             try:
                 out.append(custom_design(spec, n_runs, n_center=n_center))
                 break
+            except ValueError:
+                continue
+    return out
+
+
+def split_plot_widths(spec: DesignSpec) -> tuple[int, int]:
+    """(whole-plot, subplot) coefficient counts of the fitted model.
+
+    A term is a whole-plot term when every factor in it is hard to change; the
+    intercept counts as one.
+    """
+    hard = set(spec.whole_plot_factors)
+    levels = spec.levels
+    p_wp = p_sp = 0
+    for term in fitted_model(spec).terms:
+        if set(term) <= hard:
+            p_wp += term_width(term, levels)
+        else:
+            p_sp += term_width(term, levels)
+    return p_wp, p_sp
+
+
+def whole_plot_counts(spec: DesignSpec, n_runs: int) -> list[int]:
+    """Whole-plot counts to try for ``n_runs`` runs.
+
+    The scientist's own count when given. Otherwise the fewest that leaves
+    SPLIT_PLOT_MIN_DF to test the hard-to-change factors, twice that, and the
+    most the runs allow — more whole plots buy power for those factors at the
+    cost of more resets, which is exactly the tradeoff to show. Counts that
+    would starve the subplot stratum or leave a whole plot with one run are
+    dropped.
+    """
+    p_wp, p_sp = split_plot_widths(spec)
+    if spec.n_whole_plots is not None:
+        # The scientist's count is built even when it leaves too few degrees of
+        # freedom, so the options table can say why it fails rather than
+        # silently showing nothing.
+        return [spec.n_whole_plots] if spec.n_whole_plots * MIN_RUNS_PER_WHOLE_PLOT <= n_runs else []
+    else:
+        fewest = p_wp + SPLIT_PLOT_MIN_DF
+        wanted = [fewest, 2 * fewest, n_runs // MIN_RUNS_PER_WHOLE_PLOT]
+    return [
+        g for g in dict.fromkeys(wanted)
+        if g * MIN_RUNS_PER_WHOLE_PLOT <= n_runs and n_runs - g - p_sp >= SPLIT_PLOT_MIN_DF and g - p_wp >= 1
+    ]
+
+
+def _split_plot_candidates(spec: DesignSpec) -> list[Design]:
+    """Split-plot designs at each run budget and whole-plot count; failed searches are skipped."""
+    out: list[Design] = []
+    for n_runs in custom_run_budgets(spec):
+        for n_plots in whole_plot_counts(spec, n_runs):
+            try:
+                out.append(split_plot_design(spec, n_runs, n_plots))
             except ValueError:
                 continue
     return out
@@ -308,6 +377,12 @@ def score_candidates(spec: DesignSpec, designs: list[Design] | None = None, seed
             )
         elif props.residual_df <= 0:
             entry.disqualified = "saturated: no degrees of freedom left to estimate uncertainty"
+        elif props.power.whole_plot_df is not None and props.power.whole_plot_df <= 0:
+            entry.disqualified = (
+                "too few whole plots: no degrees of freedom left to test the hard-to-change factors"
+            )
+        elif props.power.subplot_df is not None and props.power.subplot_df <= 0:
+            entry.disqualified = "no degrees of freedom left within whole plots to test the easy-to-change factors"
         elif spec.max_runs is not None and props.n_runs > spec.max_runs:
             entry.disqualified = f"needs {props.n_runs} runs, over your budget of {spec.max_runs}"
         elif spec.hard_ranges and props.prediction.axial_points_outside_range:
@@ -375,6 +450,7 @@ def _variant_key(design: Design) -> tuple:
         design.detail.get("fraction"),
         design.detail.get("replicates"),
         design.detail.get("criterion"),
+        design.detail.get("n_whole_plots"),
     )
 
 

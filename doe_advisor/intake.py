@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 
 from .designs.spec import (
@@ -133,7 +134,12 @@ def spec_from_dict(payload: dict) -> DesignSpec:
         if kind not in ("continuous", "categorical"):
             raise IntakeError(f"{name}: factor type must be 'continuous' or 'categorical', got {kind!r}.")
         if kind == "categorical":
-            factors.append(_categorical_factor(name, item.get("levels"), str(item.get("units") or "").strip()))
+            factors.append(
+                replace(
+                    _categorical_factor(name, item.get("levels"), str(item.get("units") or "").strip()),
+                    hard_to_change=_flag(item.get("hard_to_change")),
+                )
+            )
             continue
         low = _number(item.get("low"), f"low value for {name or f'factor {i + 1}'}")
         high = _number(item.get("high"), f"high value for {name or f'factor {i + 1}'}")
@@ -141,7 +147,15 @@ def spec_from_dict(payload: dict) -> DesignSpec:
             raise IntakeError(f"{name}: the low and high values are the same, so it is not a factor.")
         if low > high:
             low, high = high, low  # a transposed range is a typo, not an error
-        factors.append(Factor(name=name, low=low, high=high, units=str(item.get("units") or "").strip()))
+        factors.append(
+            Factor(
+                name=name,
+                low=low,
+                high=high,
+                units=str(item.get("units") or "").strip(),
+                hard_to_change=_flag(item.get("hard_to_change")),
+            )
+        )
 
     names = [f.name for f in factors]
     duplicates = {n for n in names if names.count(n) > 1}
@@ -228,6 +242,12 @@ def spec_from_dict(payload: dict) -> DesignSpec:
 
     centre = _number(payload.get("n_center_points"), "centre points", allow_none=True)
     losses = _number(payload.get("expected_run_losses"), "expected run losses", allow_none=True)
+    n_whole_plots, wp_ratio = _split_plot(payload, factors)
+    if any(f.hard_to_change for f in factors) and _blocks(payload.get("n_blocks")) > 1:
+        raise IntakeError(
+            "Use whole plots or blocks, not both: a split-plot design already groups its runs by the "
+            "hard-to-change settings."
+        )
 
     return DesignSpec(
         factors=factors,
@@ -240,7 +260,35 @@ def spec_from_dict(payload: dict) -> DesignSpec:
         n_blocks=_blocks(payload.get("n_blocks")),
         constraints=constraints,
         disallowed=disallowed,
+        n_whole_plots=n_whole_plots,
+        wp_variance_ratio=wp_ratio,
     )
+
+
+def _flag(value) -> bool:
+    """A checkbox or JSON boolean; strings like "false" and "no" are false."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "on")
+    return bool(value)
+
+
+def _split_plot(payload: dict, factors: list[Factor]) -> tuple[int | None, float]:
+    """Whole-plot count and variance ratio, checked only when a factor is hard to change."""
+    hard = [f for f in factors if f.hard_to_change]
+    if not hard:
+        return None, 1.0
+    if len(hard) == len(factors):
+        raise IntakeError(
+            "Every factor is marked hard to change, so each run would be its own whole plot. "
+            "Mark at least one factor as easy to change."
+        )
+    plots = _number(payload.get("n_whole_plots"), "number of whole plots", allow_none=True)
+    if plots is not None and (plots < 2 or plots != int(plots)):
+        raise IntakeError("The number of whole plots must be a whole number, 2 or more.")
+    ratio = _number(payload.get("wp_variance_ratio"), "whole-plot variance ratio", allow_none=True)
+    if ratio is not None and ratio < 0:
+        raise IntakeError("The whole-plot variance ratio cannot be negative (1 is the usual default).")
+    return (None if plots is None else int(plots)), (1.0 if ratio is None else ratio)
 
 
 def _categorical_factor(name: str, raw_levels, units: str) -> Factor:
@@ -417,8 +465,12 @@ def parse_constraint_text(
 
 def _factor_to_dict(f: Factor) -> dict:
     if f.is_categorical:
-        return {"name": f.name, "type": "categorical", "levels": list(f.levels), "units": f.units}
-    return {"name": f.name, "low": f.low, "high": f.high, "units": f.units}
+        out = {"name": f.name, "type": "categorical", "levels": list(f.levels), "units": f.units}
+    else:
+        out = {"name": f.name, "low": f.low, "high": f.high, "units": f.units}
+    if f.hard_to_change:
+        out["hard_to_change"] = True
+    return out
 
 
 def spec_to_dict(spec: DesignSpec) -> dict:
@@ -449,6 +501,9 @@ def spec_to_dict(spec: DesignSpec) -> dict:
         "hard_ranges": spec.hard_ranges,
         "n_blocks": spec.n_blocks,
     }
+    if spec.is_split_plot:
+        out["n_whole_plots"] = spec.n_whole_plots
+        out["wp_variance_ratio"] = spec.wp_variance_ratio
     if spec.constraints:
         out["constraints"] = [
             {"coefficients": dict(c.coefficients), "op": c.op, "bound": c.bound} for c in spec.constraints
@@ -479,6 +534,8 @@ Return JSON only, in this shape:
 Rules:
 - A factor with named options rather than a numeric range (media, cell line, resin, supplier, \
 operator) is "type": "categorical" with its "levels" listed; it has no low or high.
+- A factor the text says is slow, costly or impractical to reset between runs (incubator or \
+reactor-bank temperature, a media batch, a plate-level setting) gets "hard_to_change": true.
 - Extract only what the text actually says. Use null for anything not stated. Do NOT invent ranges, \
 target effects, or noise estimates — a guessed range that looks plausible is worse than a blank field, \
 because the scientist will not notice it.

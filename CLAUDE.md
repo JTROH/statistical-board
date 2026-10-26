@@ -64,6 +64,9 @@ python3 -m validation.compare      # non-zero exit on any disagreement
 `tests/test_validation.py` runs `validation.compare` inside pytest, so a design-engine
 change that breaks agreement with R fails the normal test run. The R leg auto-skips
 if `Rscript` is missing; the JMP leg is manual (`validation/JMP_INSTRUCTIONS.md`).
+`Rscript validation/validate_kr.R` is a separate leg (lme4 + pbkrtest) that checks the
+`mixed-model` analysis and its Kenward–Roger tests on the frozen `validation/datasets/
+kr_*.csv`; it skips on its own when those packages are missing.
 
 ### Running each front-end
 
@@ -219,6 +222,25 @@ form dict → intake.spec_from_dict → DesignSpec
 - `optimal.py` — custom designs: Meyer–Nachtsheim coordinate exchange with
   rank-one `(X'X)^-1` updates, D- or I-optimal, any run count, constraints, fixed
   prior runs, partly-fixed centre runs. The only generator for categorical factors.
+- `split_plot.py` — split-plot designs for `hard_to_change` factors: Jones–Goos
+  coordinate exchange over whole-plot moves (recomputed) and subplot moves (rank-4
+  Woodbury on `X'V^-1X`). The only generator when any factor is hard to change.
+
+**Split-plot designs.** `Design.whole_plots` labels each run's whole plot;
+`DesignSpec.wp_variance_ratio` is eta = sigma_wp^2 / sigma^2 (default 1, as JMP).
+Every precision number uses `model.information(x, whole_plots, eta)` = `X'V^-1X`,
+never `X'X`; power tests each term on its stratum's df (`model.stratum_df`, the
+containment rule — whole-plot terms are the ones constant within every whole plot,
+read off the design). The analysis counterpart is `stat_board.engine` `mixed-model`:
+REML, random intercept per group, **Kenward–Roger** tests (bias-adjusted covariance,
+scaled F, KR denominator df; pbkrtest's formulas), with Satterthwaite df per
+coefficient and the containment tests reported alongside, and containment as the
+fallback if KR cannot be computed. `tests/engine/test_mixed_model.py` checks KR
+against the classical split-plot ANOVA (exact in balanced designs, multi-df too)
+and against Satterthwaite (identical for single-df contrasts, by algebra), and the
+validation leg against R's pbkrtest to ~1e-8. That agreement depends on the tight
+L-BFGS stopping rule in `mixed_model` (`pgtol`, `factr`); do not drop it. Design
+power deliberately stays on containment df: eta is assumed there, not estimated.
 
 **Categorical factors.** `Factor(levels=(...))`. In a design matrix a categorical
 column holds the *level index* (0..k-1); `model.model_matrix(..., levels=)` expands
@@ -302,6 +324,10 @@ two execution paths, so a change to a role's stance usually belongs in both.
   level index as a slope.
 - **Use `fitted_model(spec).terms`, not `model_terms(...)`, wherever a spec is in
   hand.** Otherwise a disallowed combination makes every candidate look singular.
+- **Pass `design.whole_plots` and `spec.wp_variance_ratio` to every scoring call
+  for a split-plot design** (`d_efficiency`, `scaled_prediction_variance`,
+  `_min_term_power`, `alias_report(eta=)`). Leaving them out silently scores the
+  design as completely randomised and overstates power for hard-to-change factors.
 - **`target_effect` is the change across the full low-to-high range**, so the coded
   coefficient is half of it. Someone entering a half-range effect silently gets a
   badly underpowered design.

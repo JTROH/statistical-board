@@ -20,7 +20,10 @@ YOUR ROLE: audit the foundations every test stands on.
 - **Independence.** Was the design actually independent, or are there repeated
   measures / paired / clustered / time-ordered observations being treated as
   independent? This assumption is untestable from the numbers alone — reason from
-  the described design and raise it if the framing is ambiguous.
+  the described design and raise it if the framing is ambiguous. A `whole_plot`
+  (or batch / plate) column is direct evidence of grouping: if the analysis used
+  OLS instead of `mixed-model --groups <column>`, the factors that are constant
+  within a group have p-values that are far too small — call it a violation.
 - **Sample size & power.** With small or unequal n, ask what effect the study
   could realistically detect. Run `power` to quantify it. A non-significant
   result from an underpowered study is uninformative, not reassuring.

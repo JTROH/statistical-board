@@ -14,28 +14,32 @@ from pathlib import Path
 
 import pytest
 
-from validation.cases import BOX_BEHNKEN_CASES, CENTRAL_COMPOSITE_CASES, DSD_CASES, FRACTIONAL_CASES
+from validation.cases import BOX_BEHNKEN_CASES, CENTRAL_COMPOSITE_CASES, DSD_CASES, FRACTIONAL_CASES, KR_CASES
 from validation.compare import (
     Comparison,
     check_dsd,
     compare_box_behnken,
     compare_central_composite,
     compare_fractional,
+    compare_kenward_roger,
 )
+from validation.kr_datasets import DATASET_DIR
 from validation.run_tool import (
     box_behnken_results,
     central_composite_results,
     dsd_results,
     fractional_results,
+    kenward_roger_results,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _r_available() -> bool:
+def _r_available(packages: tuple[str, ...] = ("FrF2", "rsm", "jsonlite")) -> bool:
     if shutil.which("Rscript") is None:
         return False
-    probe = 'cat(all(sapply(c("FrF2","rsm","jsonlite"), requireNamespace, quietly=TRUE)))'
+    names = ",".join(f'"{p}"' for p in packages)
+    probe = f"cat(all(sapply(c({names}), requireNamespace, quietly=TRUE)))"
     try:
         result = subprocess.run(
             ["Rscript", "-e", probe], capture_output=True, text=True, timeout=120, cwd=REPO_ROOT
@@ -46,6 +50,9 @@ def _r_available() -> bool:
 
 
 requires_r = pytest.mark.skipif(not _r_available(), reason="R with FrF2/rsm/jsonlite not available")
+requires_r_kr = pytest.mark.skipif(
+    not _r_available(("lme4", "pbkrtest", "jsonlite")), reason="R with lme4/pbkrtest/jsonlite not available"
+)
 
 
 @pytest.fixture(scope="module")
@@ -56,6 +63,16 @@ def r_results(tmp_path_factory):
         cwd=REPO_ROOT, capture_output=True, text=True, timeout=600, check=True,
     )
     return json.loads((REPO_ROOT / "validation" / "results" / "r.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def r_kr_results():
+    """Run the R Kenward-Roger reference script once and return its parsed output."""
+    subprocess.run(
+        ["Rscript", "validation/validate_kr.R"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=600, check=True,
+    )
+    return json.loads((REPO_ROOT / "validation" / "results" / "r_kr.json").read_text(encoding="utf-8"))
 
 
 # --------------------------------------------------------------------------
@@ -82,6 +99,14 @@ def test_resolution_is_the_first_non_zero_entry_of_the_pattern():
         pattern = entry["word_length_pattern"]
         first = next(i for i, count in enumerate(pattern) if count > 0)
         assert entry["resolution"] == first + 3
+
+
+def test_every_kenward_roger_case_has_its_frozen_dataset_and_a_result():
+    for dataset, *_ in KR_CASES:
+        assert (DATASET_DIR / dataset).exists(), dataset
+    results = kenward_roger_results()
+    assert len(results) == len(KR_CASES)
+    assert all(r["df_method"] == "Kenward-Roger" for r in results)
 
 
 def test_definitive_screening_designs_meet_their_published_properties():
@@ -129,3 +154,13 @@ def test_no_centre_points_means_no_centre_points(r_results):
     theirs = {e["case"]: e for e in r_results["box_behnken"]}
     for case in sorted(set(ours) & set(theirs)):
         assert ours[case]["n_runs"] == theirs[case]["n_runs"]
+
+
+@requires_r_kr
+def test_mixed_model_kenward_roger_agrees_with_pbkrtest(r_kr_results):
+    """Variance components, coefficients, plug-in and adjusted SEs, and every
+    term's scaled F, denominator df, F scaling and p, against lme4 + pbkrtest."""
+    comparison = Comparison()
+    compare_kenward_roger(kenward_roger_results(), r_kr_results["kenward_roger"], comparison)
+    assert len(comparison.rows) > 150, "fewer cases were compared than expected"
+    assert comparison.failures == [], comparison.failures

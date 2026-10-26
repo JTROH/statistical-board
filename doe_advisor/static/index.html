@@ -55,11 +55,13 @@
     <p class="hint">
       The things you can set. Low and high are the edges of the range you want to explore. A factor with named
       options instead of a range &mdash; media, cell line, resin, supplier &mdash; is <strong>categorical</strong>:
-      list its levels, separated by commas.
+      list its levels, separated by commas. Tick <strong>hard to change</strong> for a factor you cannot reset
+      between every run (an incubator temperature, a media batch, a plate-level setting): it is then set once per
+      <em>whole plot</em> and the design becomes a split-plot.
     </p>
     <table class="grid" id="factors">
       <thead>
-        <tr><th>Name</th><th>Type</th><th>Low</th><th>High</th><th>Units</th><th aria-label="remove"></th></tr>
+        <tr><th>Name</th><th>Type</th><th>Low</th><th>High</th><th>Units</th><th title="Set once per whole plot instead of every run">Hard to change</th><th aria-label="remove"></th></tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -156,6 +158,14 @@
       </div>
       <div class="field">
         <label for="hard-ranges"><input type="checkbox" id="hard-ranges"> Ranges are hard limits</label>
+      </div>
+      <div class="field split-only" hidden>
+        <label for="whole-plots">Whole plots</label>
+        <input type="number" id="whole-plots" min="2" step="1" placeholder="tool proposes">
+      </div>
+      <div class="field split-only" hidden>
+        <label for="wp-ratio" title="Whole-plot variance / run-to-run variance. 1 is the usual default.">Whole-plot variance ratio</label>
+        <input type="number" id="wp-ratio" min="0" step="any" value="1">
       </div>
     </div>
     <p class="hint" id="model-note"></p>

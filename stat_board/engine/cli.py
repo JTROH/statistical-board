@@ -134,6 +134,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--factor", action="append", required=True, dest="factors")
     sp.add_argument("--alpha", type=float, default=0.05)
 
+    mm = sub.add_parser("mixed-model", help="REML mixed model, random intercept per group (split-plot analysis)")
+    mm.add_argument("--data", required=True)
+    mm.add_argument("--formula", required=True)
+    mm.add_argument("--groups", required=True, help="column naming the whole plot / group (e.g. whole_plot)")
+    mm.add_argument("--alpha", type=float, default=0.05)
+
     return parser
 
 
@@ -207,6 +213,8 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return analyses.bayes_regression(args.data, args.formula, **kwargs)
     if cmd == "stationary-point":
         return analyses.stationary_point(args.data, args.formula, args.factors, alpha=args.alpha)
+    if cmd == "mixed-model":
+        return analyses.mixed_model(args.data, args.formula, args.groups, alpha=args.alpha)
     if cmd == "doe-optimum":
         return analyses.doe_optimum(args.data, args.formula, args.factors, args.value)
     raise ValueError(f"unknown command: {cmd}")

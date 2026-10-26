@@ -19,6 +19,12 @@ import numpy as np
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 TOL = 1e-9
+# Mixed models are fitted by two different optimisers on the same REML surface
+# (statsmodels here, lme4 in R), so they agree to optimiser precision, not to
+# machine precision — about 1e-8 with the tight settings both sides use.
+# Everything downstream inherits that, so one relative tolerance covers
+# variance components, standard errors, F and df alike.
+KR_RTOL = 1e-6
 
 
 class Comparison:
@@ -124,6 +130,39 @@ def compare_blocking(ours: list[dict], theirs: list[dict], comparison: Compariso
         )
 
 
+def compare_kenward_roger(ours: list[dict], theirs: list[dict], comparison: Comparison) -> None:
+    """Mixed-model fits and Kenward-Roger tests against lme4 + pbkrtest."""
+
+    def close(case: str, field: str, a: float, b: float) -> None:
+        tol = KR_RTOL * max(1.0, abs(float(b)))
+        comparison.check(case, field, float(a), float(b), tol=tol)
+
+    mine, reference = _index(ours), _index(theirs)
+    for case in sorted(set(mine) & set(reference)):
+        a, b = mine[case], reference[case]
+        comparison.check(case, "method", a["df_method"], "Kenward-Roger")
+        comparison.check(case, "n", a["n"], b["n"])
+        # A whole-plot variance on the boundary is zero on both sides; scale by the residual one.
+        comparison.check(case, "var_group", float(a["var_group"]), float(b["var_group"]),
+                         tol=KR_RTOL * max(1.0, float(b["var_resid"])))
+        close(case, "var_resid", a["var_resid"], b["var_resid"])
+        for name, x, y in zip(a["coef_names"], a["coef"], np.atleast_1d(b["coef"]), strict=True):
+            close(case, f"coef {name}", x, y)
+        for name, x, y in zip(a["coef_names"], a["se_plugin"], np.atleast_1d(b["se_plugin"]), strict=True):
+            close(case, f"se {name}", x, y)
+        for name, x, y in zip(a["coef_names"], a["se_adjusted"], np.atleast_1d(b["se_adjusted"]), strict=True):
+            close(case, f"KR se {name}", x, y)
+        theirs_tests = {t["term"]: t for t in b["tests"]}
+        for t in a["tests"]:
+            r = theirs_tests[t["term"]]
+            comparison.check(case, f"{t['term']} num df", int(t["num_df"]), int(r["num_df"]))
+            close(case, f"{t['term']} F", t["F"], r["F"])
+            close(case, f"{t['term']} den df", t["den_df"], r["den_df"])
+            close(case, f"{t['term']} F scale", t["scale"], r["scale"])
+            comparison.check(case, f"{t['term']} p", float(t["p"]), float(r["p"]),
+                             tol=KR_RTOL * max(float(r["p"]), 1e-6))
+
+
 def check_dsd(ours: list[dict], comparison: Comparison) -> None:
     """No R reference is installed, so check the published defining properties."""
     for entry in ours:
@@ -177,6 +216,18 @@ def main() -> int:
             fn(ours.get(key, []), theirs.get(key, []), comparison)
             comparison.report(title)
             overall.append(comparison)
+
+    kr_path = RESULTS_DIR / "r_kr.json"
+    if not kr_path.exists():
+        print("\nNo R Kenward-Roger results found — run: Rscript validation/validate_kr.R")
+    else:
+        theirs_kr = json.loads(kr_path.read_text(encoding="utf-8"))
+        print(f"\nReference: R {theirs_kr.get('r_version')}, lme4 {theirs_kr['packages']['lme4']}, "
+              f"pbkrtest {theirs_kr['packages']['pbkrtest']}")
+        comparison = Comparison()
+        compare_kenward_roger(ours.get("kenward_roger", []), theirs_kr["kenward_roger"], comparison)
+        comparison.report("Mixed model + Kenward-Roger vs lme4/pbkrtest")
+        overall.append(comparison)
 
     failures = sum(len(c.failures) for c in overall)
     checks = sum(len(c.rows) for c in overall)

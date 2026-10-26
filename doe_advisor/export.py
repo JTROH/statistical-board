@@ -67,7 +67,13 @@ def run_sheet_rows(design: Design, spec: DesignSpec, *, seed: int = 0) -> tuple[
     order = design.randomised_order(seed=seed)
 
     blocked = design.blocks is not None
-    header = ["run_order", "block", "run_type"] if blocked else ["run_order", "run_type"]
+    split = design.whole_plots is not None
+    header = ["run_order"] + (["block"] if blocked else []) + (["whole_plot"] if split else []) + ["run_type"]
+    # Whole plots are numbered 1, 2, ... in the order they are run.
+    plot_number = {}
+    if split:
+        for run in order:
+            plot_number.setdefault(int(design.whole_plots[run]), len(plot_number) + 1)
     for factor in spec.factors:
         if factor.is_categorical:
             header.append(natural_column(factor))
@@ -81,6 +87,8 @@ def run_sheet_rows(design: Design, spec: DesignSpec, *, seed: int = 0) -> tuple[
         row: list = [position + 1]
         if blocked:
             row.append(int(design.blocks[run]) + 1)  # 1-based on the bench sheet
+        if split:
+            row.append(plot_number[int(design.whole_plots[run])])
         row.append(run_type(coded_row, design.levels))
         for j, factor in enumerate(spec.factors):
             if factor.is_categorical:
@@ -124,16 +132,32 @@ def analysis_hint(spec: DesignSpec) -> dict:
         # The block offset is fitted, never interpreted: it is there to remove
         # day-to-day shifts, not to be tested as a finding.
         formula += " + C(block)"
+    split = spec.is_split_plot
+    notes = []
+    if log:
+        notes.append(
+            f"The design was powered for log10 {spec.responses[0].name}. Record raw values; analyse the "
+            f"log10 (the formula above does). Ask the board to analyse on the log10 scale."
+        )
+    if split:
+        notes.append(
+            "This is a split-plot design: runs in one whole plot share their hard-to-change settings and are "
+            "not independent. Analyse it as a mixed model with whole_plot as the grouping column (the "
+            "mixed_model command below) — an ordinary regression overstates the evidence for "
+            + ", ".join(f.name for f in spec.factors if f.hard_to_change) + "."
+        )
     return {
         "factor_columns": factors,
         "categorical_columns": [col for f, col in zip(spec.factors, factors, strict=True) if f.is_categorical],
         "response_columns": responses,
         "formula": formula,
         "response_scale": "log10" if log else "raw",
-        "note": (
-            f"The design was powered for log10 {spec.responses[0].name}. Record raw values; analyse the "
-            f"log10 (the formula above does). Ask the board to analyse on the log10 scale."
-            if log
+        "note": " ".join(notes) or None,
+        "groups": "whole_plot" if split else None,
+        "mixed_model": (
+            f"python3 -m stat_board.engine mixed-model --data <run sheet>.csv --formula \"{formula}\" "
+            "--groups whole_plot"
+            if split
             else None
         ),
         "skill": "/stat-board data=<run sheet>.csv question=\"...\" "
